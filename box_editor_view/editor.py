@@ -63,12 +63,13 @@ FACE_NORMALS: tuple[FaceNormal, ...] = (
     (0, 0, 1),
     (0, 0, -1),
 )
+MIN_SHADOW_SPAN = 32.0
+SHADOW_PADDING = 12.0
 PLAYER_WIDTH = 0.96
 PLAYER_HEIGHT = 1.8
 EYE_HEIGHT = 1.70
 CAMERA_NEAR = 0.03
 CAMERA_FOV = 82.0
-PLAYER_BOUNDS_PADDING = 5.0
 MOVE_SPEED = 5.2
 VERTICAL_SPEED = 4.4
 MOUSE_SENSITIVITY = 0.055
@@ -181,13 +182,17 @@ class BoxEditorApp(ShowBase):
         sun.setShadowCaster(True, 4096, 4096)
         sun.setCameraMask(SHADOW_CAMERA_MASK)
         sun_lens = OrthographicLens()
-        sun_lens.setFilmSize(24, 24)
-        sun_lens.setNearFar(-20, 45)
+        shadow_span = self._shadow_scene_span()
+        sun_lens.setFilmSize(shadow_span, shadow_span)
+        sun_lens.setNearFar(-shadow_span, shadow_span)
         sun.setLens(sun_lens)
         sun_path = self.render.attachNewNode(sun)
-        sun_path.setPos(-10, -12, 24)
+        center = self.box_map.size * 0.5
+        sun_path.setPos(center, center, center)
         sun_path.setHpr(-38, -56, 0)
         self.render.setLight(sun_path)
+        self.sun_lens = sun_lens
+        self.sun_path = sun_path
         self.hover_shadow_mask = sun.getCameraMask()
         self.hover_outline.hide(self.hover_shadow_mask)
 
@@ -200,6 +205,9 @@ class BoxEditorApp(ShowBase):
         self.render.setShaderAuto()
         self.render.setAntialias(AntialiasAttrib.MMultisample)
         self.setBackgroundColor(0.60, 0.72, 0.86, 1.0)
+
+    def _shadow_scene_span(self) -> float:
+        return max(MIN_SHADOW_SPAN, math.sqrt(3.0) * self.box_map.size + SHADOW_PADDING)
 
     def _setup_collision_picker(self) -> None:
         self.picker = CollisionTraverser("picker")
@@ -442,11 +450,11 @@ class BoxEditorApp(ShowBase):
                 self._snap_player_to_support(abs(component.z) + STANDING_TOLERANCE)
 
     def _clamp_player_position(self, pos: Vec3) -> Vec3:
-        lower = -PLAYER_BOUNDS_PADDING
-        upper = self.box_map.size + PLAYER_BOUNDS_PADDING
+        lower_xy = -self.box_map.size
+        upper = self.box_map.size * 2.0
         return Vec3(
-            max(lower, min(upper, pos.x)),
-            max(lower, min(upper, pos.y)),
+            max(lower_xy, min(upper, pos.x)),
+            max(lower_xy, min(upper, pos.y)),
             max(0.0, min(upper, pos.z)),
         )
 

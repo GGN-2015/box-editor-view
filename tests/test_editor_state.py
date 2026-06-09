@@ -67,11 +67,11 @@ def test_player_camera_and_collision_dimensions_are_not_tiny():
     assert editor.SOUND_VOLUME == 0.5
 
 
-def test_player_position_is_limited_to_map_plus_padding(tmp_path):
+def test_player_position_is_limited_to_size_scaled_bounds(tmp_path):
     app = make_app(tmp_path, BoxMap(n=2))
     try:
-        lower = -editor.PLAYER_BOUNDS_PADDING
-        upper = app.box_map.size + editor.PLAYER_BOUNDS_PADDING
+        lower = -app.box_map.size
+        upper = app.box_map.size * 2
 
         assert app.player_pos.z >= 0
         assert app._clamp_player_position(Vec3(-99, -99, -99)) == Vec3(lower, lower, 0)
@@ -81,11 +81,11 @@ def test_player_position_is_limited_to_map_plus_padding(tmp_path):
         app.destroy()
 
 
-def test_player_movement_cannot_leave_map_plus_padding(tmp_path):
+def test_player_movement_cannot_leave_size_scaled_bounds(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1))
     try:
-        lower = -editor.PLAYER_BOUNDS_PADDING
-        upper = app.box_map.size + editor.PLAYER_BOUNDS_PADDING
+        lower = -app.box_map.size
+        upper = app.box_map.size * 2
 
         app.player_pos = Vec3(upper - 0.1, lower + 0.1, 0.1)
         app._move_player_with_collision(Vec3(10, -10, 10))
@@ -314,6 +314,19 @@ def test_editor_lines_are_hidden_from_shadow_camera(tmp_path):
         assert app.bounds_node is not None
         assert app.hover_outline.isHidden(app.hover_shadow_mask)
         assert app.bounds_node.isHidden(app.hover_shadow_mask)
+    finally:
+        app.destroy()
+
+
+def test_shadow_camera_covers_large_maps(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=5, boxes={(31, 31, 31): (1, 0, 0, 1)}))
+    try:
+        expected_span = math.sqrt(3.0) * app.box_map.size + editor.SHADOW_PADDING
+        assert app.sun_lens.getFilmSize().x == pytest.approx(expected_span)
+        assert app.sun_lens.getFilmSize().y == pytest.approx(expected_span)
+        assert app.sun_lens.getNear() == pytest.approx(-expected_span)
+        assert app.sun_lens.getFar() == pytest.approx(expected_span)
+        assert app.sun_path.getPos() == Vec3(16, 16, 16)
     finally:
         app.destroy()
 
