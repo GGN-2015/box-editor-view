@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "box-editor-view"
 version = "0.1.0"
@@ -17,6 +21,11 @@ dev = [
 
 [project.scripts]
 box-editor-view = "box_editor_view.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["box_editor_view*"]
+exclude = ["scripts*", "tests*", "docs*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

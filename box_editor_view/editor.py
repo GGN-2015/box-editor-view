@@ -450,8 +450,9 @@ class BoxEditorApp(ShowBase):
                 self._snap_player_to_support(abs(component.z) + STANDING_TOLERANCE)
 
     def _clamp_player_position(self, pos: Vec3) -> Vec3:
-        lower_xy = -self.box_map.size
-        upper = self.box_map.size * 2.0
+        padding = max(5.0, float(self.box_map.size))
+        lower_xy = -padding
+        upper = self.box_map.size + padding
         return Vec3(
             max(lower_xy, min(upper, pos.x)),
             max(lower_xy, min(upper, pos.y)),

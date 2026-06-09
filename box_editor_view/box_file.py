@@ -9,7 +9,7 @@ from typing import Iterable
 RGBA = tuple[float, float, float, float]
 Cell = tuple[int, int, int]
 
-MIN_N = 1
+MIN_N = 0
 MAX_N = 5
 DEFAULT_N = 3
 DEFAULT_COLOR: RGBA = (140 / 255, 140 / 255, 140 / 255, 1.0)
@@ -102,13 +102,13 @@ class BoxMap:
 
 def validate_n(value: object) -> int:
     if isinstance(value, bool):
-        raise BoxFormatError("N must be an integer from 1 to 5")
+        raise BoxFormatError("N must be an integer from 0 to 5")
     try:
         n = int(value)
     except (TypeError, ValueError) as exc:
-        raise BoxFormatError("N must be an integer from 1 to 5") from exc
+        raise BoxFormatError("N must be an integer from 0 to 5") from exc
     if n < MIN_N or n > MAX_N:
-        raise BoxFormatError("N must be an integer from 1 to 5")
+        raise BoxFormatError("N must be an integer from 0 to 5")
     return n
 
 

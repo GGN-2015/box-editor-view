@@ -2,7 +2,26 @@
 
 Author: GGN_2015
 
-A Panda3D visual editor for sparse `.box` voxel maps. A `.box` file is JSON text:
+A Panda3D visual editor for sparse `.box` voxel maps.
+
+## Showcase
+
+This repository includes `piano.box`, a hand-built voxel piano scene created with the editor.
+
+![Voxel piano front view](docs/images/piano_front.png)
+
+![Voxel piano keyboard close-up](docs/images/piano_keys.png)
+
+![Voxel piano angled view](docs/images/piano_angle.png)
+
+Open the demo scene:
+
+```bash
+source venv/bin/activate
+python -m box_editor_view piano.box
+```
+
+## File Format
 
 ```json
 {
@@ -13,7 +32,7 @@ A Panda3D visual editor for sparse `.box` voxel maps. A `.box` file is JSON text
 }
 ```
 
-`N` must be from `1` to `5`, and the editable map size is `(2^N)^3`. Empty cells are not written to the file.
+`N` must be from `0` to `5`, and the editable map size is `(2^N)^3`. Empty cells are not written to the file.
 
 ## Setup
 
@@ -48,6 +67,19 @@ python -m box_editor_view my_map.box --new -n 5
 ```
 
 If no path is given, the editor uses `untitled.box` in the current directory.
+
+## Scripts
+
+The `scripts/` directory contains repository maintenance and demo-generation tools. These scripts are not packaged into the installable Python project.
+
+- `scripts/make_piano_demo.py`: rebuilds `piano.box` and refreshes the showcase screenshots in `docs/images/`.
+
+Run it from the repository root:
+
+```bash
+source venv/bin/activate
+python scripts/make_piano_demo.py
+```
 
 ## Controls
 

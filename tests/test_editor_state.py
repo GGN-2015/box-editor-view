@@ -70,8 +70,9 @@ def test_player_camera_and_collision_dimensions_are_not_tiny():
 def test_player_position_is_limited_to_size_scaled_bounds(tmp_path):
     app = make_app(tmp_path, BoxMap(n=2))
     try:
-        lower = -app.box_map.size
-        upper = app.box_map.size * 2
+        padding = max(5, app.box_map.size)
+        lower = -padding
+        upper = app.box_map.size + padding
 
         assert app.player_pos.z >= 0
         assert app._clamp_player_position(Vec3(-99, -99, -99)) == Vec3(lower, lower, 0)
@@ -84,13 +85,24 @@ def test_player_position_is_limited_to_size_scaled_bounds(tmp_path):
 def test_player_movement_cannot_leave_size_scaled_bounds(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1))
     try:
-        lower = -app.box_map.size
-        upper = app.box_map.size * 2
+        padding = max(5, app.box_map.size)
+        lower = -padding
+        upper = app.box_map.size + padding
 
         app.player_pos = Vec3(upper - 0.1, lower + 0.1, 0.1)
         app._move_player_with_collision(Vec3(10, -10, 10))
 
         assert app.player_pos == Vec3(upper, lower, upper)
+    finally:
+        app.destroy()
+
+
+def test_player_bounds_use_size_when_size_exceeds_minimum(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=5))
+    try:
+        size = app.box_map.size
+        assert app._clamp_player_position(Vec3(-99, -99, -99)) == Vec3(-size, -size, 0)
+        assert app._clamp_player_position(Vec3(99, 99, 99)) == Vec3(size * 2, size * 2, size * 2)
     finally:
         app.destroy()
 

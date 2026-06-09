@@ -15,7 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_N,
         choices=range(MIN_N, MAX_N + 1),
-        metavar="1..5",
+        metavar="0..5",
         help="N value for a new file; map size is (2^N)^3",
     )
     parser.add_argument(

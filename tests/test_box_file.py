@@ -18,9 +18,10 @@ def test_sparse_round_trip_omits_empty_cells(tmp_path):
     assert load_box(path).boxes[(1, 2, 3)] == pytest.approx((26 / 255, 51 / 255, 76 / 255, 102 / 255))
 
 
-def test_n_must_be_between_one_and_five():
+def test_n_must_be_between_zero_and_five():
+    assert BoxMap(n=0).size == 1
     with pytest.raises(BoxFormatError):
-        BoxMap(n=0)
+        BoxMap(n=-1)
     assert BoxMap(n=5).size == 32
     with pytest.raises(BoxFormatError):
         BoxMap(n=6)
