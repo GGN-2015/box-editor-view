@@ -1,0 +1,23 @@
+[project]
+name = "box-editor-view"
+version = "0.1.0"
+description = "A Panda3D voxel .box editor."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "GGN_2015" }]
+license = { text = "MIT" }
+dependencies = [
+    "panda3d>=1.10.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+box-editor-view = "box_editor_view.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
