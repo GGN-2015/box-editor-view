@@ -48,6 +48,15 @@ def measure(path: Path, frames: int, warmup: int) -> None:
         stats = app._chunk_stats()
 
         print(f"path={path}")
+        print(f"gpu={app.gpu_profile.label}")
+        print(
+            "gpu_profile="
+            f"hardware:{app.gpu_profile.hardware_accelerated} "
+            f"discrete:{app.gpu_profile.discrete_gpu} "
+            f"shadows:{app.gpu_profile.shadow_map_size} "
+            f"shader_auto:{app.gpu_profile.shader_auto_enabled} "
+            f"antialias:{app.gpu_profile.antialias_enabled}"
+        )
         print(f"frames={frames}")
         print(f"elapsed={elapsed:.4f}s")
         print(f"fps={frames / elapsed:.2f}")

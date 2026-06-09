@@ -396,6 +396,17 @@ def test_shadow_camera_covers_large_maps(tmp_path):
         app.destroy()
 
 
+def test_gpu_profile_does_not_change_box_logic(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 1)}))
+    try:
+        assert app.gpu_profile.vendor
+        assert app.box_map.get_box((0, 0, 0)) == (1, 0, 0, 1)
+        assert app._chunk_stats()["source_blocks"] == 1
+        assert app._chunk_stats()["visible_faces"] == 6
+    finally:
+        app.destroy()
+
+
 def test_transparent_blocks_use_alpha_rendering_and_no_shadow(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 0.5)}))
     try:

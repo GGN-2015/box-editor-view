@@ -30,6 +30,7 @@ from panda3d.core import (
 from .audio import ensure_sound_files
 from .box_file import BoxFormatError, BoxMap, Cell, DEFAULT_COLOR, RGBA, load_box, save_box
 from .geometry import FaceNormal, make_bounds, make_checker_ground, make_cube_outline, make_cuboid
+from .gpu import GpuProfile, detect_gpu_profile
 from .voxel_mesh import (
     CHUNK_SIZE,
     ChunkKey,
@@ -67,7 +68,6 @@ FACE_NORMALS: tuple[FaceNormal, ...] = (
 )
 MIN_SHADOW_SPAN = 32.0
 SHADOW_PADDING = 12.0
-SHADOW_MAP_SIZE = 2048
 PLAYER_WIDTH = 0.96
 PLAYER_HEIGHT = 1.8
 EYE_HEIGHT = 1.70
@@ -101,6 +101,7 @@ class BoxEditorApp(ShowBase):
         self.box_map = self._load_initial_map(self.path, new_file, new_n)
         self.current_color: RGBA = DEFAULT_COLOR
         self.saved_snapshot = self._current_map_snapshot()
+        self.gpu_profile: GpuProfile = detect_gpu_profile(self.win.getGsg() if self.win else None)
 
         self.world = self.render.attachNewNode("world")
         self.blocks_root = self.world.attachNewNode("blocks")
@@ -181,7 +182,8 @@ class BoxEditorApp(ShowBase):
 
         sun = DirectionalLight("sun")
         sun.setColor((1.0, 0.94, 0.82, 1.0))
-        sun.setShadowCaster(True, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
+        if self.gpu_profile.shadow_map_size > 0:
+            sun.setShadowCaster(True, self.gpu_profile.shadow_map_size, self.gpu_profile.shadow_map_size)
         sun.setCameraMask(SHADOW_CAMERA_MASK)
         sun_lens = OrthographicLens()
         shadow_span = self._shadow_scene_span()
@@ -204,8 +206,10 @@ class BoxEditorApp(ShowBase):
         fill_path.setHpr(135, -18, 0)
         self.render.setLight(fill_path)
 
-        self.render.setShaderAuto()
-        self.render.setAntialias(AntialiasAttrib.MMultisample)
+        if self.gpu_profile.shader_auto_enabled:
+            self.render.setShaderAuto()
+        if self.gpu_profile.antialias_enabled:
+            self.render.setAntialias(AntialiasAttrib.MMultisample)
         self.setBackgroundColor(0.60, 0.72, 0.86, 1.0)
 
     def _shadow_scene_span(self) -> float:
@@ -504,9 +508,10 @@ class BoxEditorApp(ShowBase):
 
     def _update_hud(self) -> None:
         color = ", ".join(str(round(channel * 255)) for channel in self.current_color)
+        gpu_mode = "GPU" if self.gpu_profile.hardware_accelerated else "software"
         self.detail.setText(
             f"{self.path.name}  N={self.box_map.n}  size={self.box_map.size}  "
-            f"blocks={len(self.box_map.boxes)}  color=({color})  view={self.view_mode}"
+            f"blocks={len(self.box_map.boxes)}  color=({color})  view={self.view_mode}  {gpu_mode}"
         )
 
     def _set_status(self, text: str) -> None:

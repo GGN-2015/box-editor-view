@@ -101,7 +101,7 @@ python scripts/measure_fps.py piano.box --frames 600 --warmup 120
 
 ## Performance
 
-The editor batches cubes into chunk meshes, renders only visible faces, greedily merges same-color coplanar faces, and uses a voxel raycast for mouse picking instead of one collision object per cube. Opaque chunk meshes cast shadows; transparent chunk meshes keep real alpha blending and do not cast shadows.
+The editor batches cubes into chunk meshes, renders only visible faces, greedily merges same-color coplanar faces, and uses a voxel raycast for mouse picking instead of one collision object per cube. It also detects the active Panda3D renderer and enables conservative GPU settings when hardware acceleration is available. Opaque chunk meshes cast shadows; transparent chunk meshes keep real alpha blending and do not cast shadows.
 
 ## Controls
 
