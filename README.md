@@ -2,7 +2,9 @@
 
 Author: GGN_2015
 
-A Panda3D visual editor for sparse `.box` voxel maps.
+Box-Editor-View is a Panda3D visual editor for sparse `.box` voxel maps. At its core, it is a box editor: every editable element is a `1x1x1` cube with RGBA color.
+
+This software is part of the future `NekoMouseCraft` project. `NekoMouseCraft` is planned as a Minecraft-like creative-mode game, and Box-Editor-View is the tool for building the reusable cube structures that will live inside it. Each `.box` file can become a small model, prop, landmark, or scene fragment, and those pieces can later be used to construct larger game worlds.
 
 ## Showcase
 
@@ -19,6 +21,13 @@ Open the demo scene:
 ```bash
 source venv/bin/activate
 python -m box_editor_view piano.box
+```
+
+There is also `pikachu.box`, a cute voxel creature model with ears, cheeks, tail, and stubby feet:
+
+```bash
+source venv/bin/activate
+python -m box_editor_view pikachu.box
 ```
 
 ## File Format
@@ -73,6 +82,7 @@ If no path is given, the editor uses `untitled.box` in the current directory.
 The `scripts/` directory contains repository maintenance and demo-generation tools. These scripts are not packaged into the installable Python project.
 
 - `scripts/make_piano_demo.py`: rebuilds `piano.box` and refreshes the showcase screenshots in `docs/images/`.
+- `scripts/make_pikachu_demo.py`: rebuilds `pikachu.box`, a compact character model useful for testing colorful organic shapes.
 
 Run it from the repository root:
 

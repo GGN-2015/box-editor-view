@@ -107,6 +107,31 @@ def test_player_bounds_use_size_when_size_exceeds_minimum(tmp_path):
         app.destroy()
 
 
+def test_player_spawn_lifts_out_of_blocks(tmp_path):
+    boxes = {
+        (2, 0, 1): (1, 0, 0, 1),
+        (2, 0, 2): (1, 0, 0, 1),
+        (2, 0, 3): (1, 0, 0, 1),
+    }
+    app = make_app(tmp_path, BoxMap(n=2, boxes=boxes))
+    try:
+        assert app.player_pos.x == pytest.approx(2.0)
+        assert app.player_pos.y == pytest.approx(0.5)
+        assert app.player_pos.z > 1.0
+        assert not app._player_collides(app.player_pos)
+        assert app._player_head_and_feet_clear(app.player_pos)
+    finally:
+        app.destroy()
+
+
+def test_player_spawn_stays_when_clear(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        assert app.player_pos == Vec3(1.0, 0.5, 1.0)
+    finally:
+        app.destroy()
+
+
 def test_camera_aspect_tracks_window_size(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1))
     original_window = app.win
@@ -421,6 +446,50 @@ def test_different_adjacent_transparent_blocks_keep_shared_faces(tmp_path):
 
         assert left_geom.getVertexData().getNumRows() == 24
         assert right_geom.getVertexData().getNumRows() == 24
+    finally:
+        app.destroy()
+
+
+def test_opaque_adjacent_blocks_omit_shared_faces(tmp_path):
+    app = make_app(
+        tmp_path,
+        BoxMap(
+            n=1,
+            boxes={
+                (0, 0, 0): (1, 0, 0, 1),
+                (1, 0, 0): (0, 1, 0, 1),
+            },
+        ),
+    )
+    try:
+        left_geom = app.block_nodes[(0, 0, 0)].node().getGeom(0)
+        right_geom = app.block_nodes[(1, 0, 0)].node().getGeom(0)
+
+        assert left_geom.getVertexData().getNumRows() == 20
+        assert right_geom.getVertexData().getNumRows() == 20
+    finally:
+        app.destroy()
+
+
+def test_opaque_shared_faces_refresh_when_neighbor_is_deleted(tmp_path):
+    app = make_app(
+        tmp_path,
+        BoxMap(
+            n=1,
+            boxes={
+                (0, 0, 0): (1, 0, 0, 1),
+                (1, 0, 0): (0, 1, 0, 1),
+            },
+        ),
+    )
+    try:
+        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 20
+
+        app.box_map.remove_box((1, 0, 0))
+        app._remove_block_node((1, 0, 0))
+        app._refresh_block_and_neighbors((1, 0, 0))
+
+        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 24
     finally:
         app.destroy()
 

@@ -7,6 +7,7 @@ __pycache__/
 *.so
 *.box
 !piano.box
+!pikachu.box
 
 # Distribution / packaging
 .Python

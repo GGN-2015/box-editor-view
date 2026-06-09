@@ -142,6 +142,7 @@ class BoxEditorApp(ShowBase):
         self._setup_lights()
         self._setup_collision_picker()
         self._setup_world()
+        self._lift_player_out_of_blocks()
         self._setup_player_model()
         self._setup_hud()
         self._setup_audio()
@@ -479,6 +480,24 @@ class BoxEditorApp(ShowBase):
                     ):
                         return True
         return False
+
+    def _lift_player_out_of_blocks(self) -> None:
+        position = self._clamp_player_position(self.player_pos)
+        upper = self.box_map.size + max(5.0, float(self.box_map.size))
+        while position.z <= upper:
+            if not self._player_collides(position) and self._player_head_and_feet_clear(position):
+                self.player_pos = position
+                return
+            position = Vec3(position.x, position.y, position.z + 1.0)
+        self.player_pos = self._clamp_player_position(position)
+
+    def _player_head_and_feet_clear(self, pos: Vec3) -> bool:
+        foot_cell = self._point_cell(Vec3(pos.x, pos.y, pos.z))
+        head_cell = self._point_cell(Vec3(pos.x, pos.y, pos.z + PLAYER_HEIGHT))
+        return foot_cell not in self.box_map.boxes and head_cell not in self.box_map.boxes
+
+    def _point_cell(self, point: Vec3) -> Cell:
+        return (math.floor(point.x), math.floor(point.y), math.floor(point.z))
 
     def _player_aabb(self, pos: Vec3) -> tuple[Vec3, Vec3]:
         half = PLAYER_WIDTH * 0.5
@@ -818,15 +837,18 @@ class BoxEditorApp(ShowBase):
 
     def _visible_faces_for_block(self, cell: Cell, color: RGBA) -> set[FaceNormal]:
         visible_faces = set(FACE_NORMALS)
-        if color[3] >= 1.0:
-            return visible_faces
 
         for normal in FACE_NORMALS:
             neighbor = (cell[0] + normal[0], cell[1] + normal[1], cell[2] + normal[2])
             neighbor_color = self.box_map.get_box(neighbor)
-            if neighbor_color is not None and neighbor_color[3] < 1.0 and neighbor_color == color:
+            if neighbor_color is not None and self._neighbor_hides_face(color, neighbor_color):
                 visible_faces.discard(normal)
         return visible_faces
+
+    def _neighbor_hides_face(self, color: RGBA, neighbor_color: RGBA) -> bool:
+        if color[3] >= 1.0 and neighbor_color[3] >= 1.0:
+            return True
+        return color[3] < 1.0 and neighbor_color[3] < 1.0 and neighbor_color == color
 
     def _refresh_block_node(self, cell: Cell) -> None:
         color = self.box_map.get_box(cell)
