@@ -83,6 +83,7 @@ The `scripts/` directory contains repository maintenance and demo-generation too
 
 - `scripts/make_piano_demo.py`: rebuilds `piano.box` and refreshes the showcase screenshots in `docs/images/`.
 - `scripts/make_pikachu_demo.py`: rebuilds `pikachu.box`, a compact character model useful for testing colorful organic shapes.
+- `scripts/measure_fps.py`: runs an offscreen render benchmark and reports FPS plus chunk mesh statistics.
 
 Run it from the repository root:
 
@@ -90,6 +91,17 @@ Run it from the repository root:
 source venv/bin/activate
 python scripts/make_piano_demo.py
 ```
+
+Measure the piano demo performance:
+
+```bash
+source venv/bin/activate
+python scripts/measure_fps.py piano.box --frames 600 --warmup 120
+```
+
+## Performance
+
+The editor batches cubes into chunk meshes, renders only visible faces, greedily merges same-color coplanar faces, and uses a voxel raycast for mouse picking instead of one collision object per cube. Opaque chunk meshes cast shadows; transparent chunk meshes keep real alpha blending and do not cast shadows.
 
 ## Controls
 

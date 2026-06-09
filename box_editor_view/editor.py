@@ -14,18 +14,12 @@ from panda3d.core import (
     AmbientLight,
     AntialiasAttrib,
     BitMask32,
-    CollisionBox,
-    CollisionHandlerQueue,
-    CollisionNode,
-    CollisionPlane,
-    CollisionRay,
-    CollisionTraverser,
     DirectionalLight,
     Filename,
     OrthographicLens,
     LineSegs,
     NodePath,
-    Plane,
+    Point2,
     Point3,
     TransparencyAttrib,
     Vec3,
@@ -35,7 +29,16 @@ from panda3d.core import (
 
 from .audio import ensure_sound_files
 from .box_file import BoxFormatError, BoxMap, Cell, DEFAULT_COLOR, RGBA, load_box, save_box
-from .geometry import FaceNormal, make_bounds, make_checker_ground, make_cube_outline, make_cuboid, make_unit_cube
+from .geometry import FaceNormal, make_bounds, make_checker_ground, make_cube_outline, make_cuboid
+from .voxel_mesh import (
+    CHUNK_SIZE,
+    ChunkKey,
+    ChunkMesh,
+    build_chunk_mesh,
+    chunk_key_for_cell,
+    neighbor_hides_face,
+    visible_faces_for_cell,
+)
 
 
 loadPrcFileData(
@@ -43,7 +46,7 @@ loadPrcFileData(
     "\n".join(
         [
             "window-title Box Editor View",
-            "sync-video true",
+            "sync-video false",
             "show-frame-rate-meter true",
             "textures-power-2 none",
             "framebuffer-multisample true",
@@ -53,7 +56,6 @@ loadPrcFileData(
 )
 
 
-PICK_MASK = BitMask32.bit(1)
 SHADOW_CAMERA_MASK = BitMask32.bit(30)
 FACE_NORMALS: tuple[FaceNormal, ...] = (
     (1, 0, 0),
@@ -65,6 +67,7 @@ FACE_NORMALS: tuple[FaceNormal, ...] = (
 )
 MIN_SHADOW_SPAN = 32.0
 SHADOW_PADDING = 12.0
+SHADOW_MAP_SIZE = 2048
 PLAYER_WIDTH = 0.96
 PLAYER_HEIGHT = 1.8
 EYE_HEIGHT = 1.70
@@ -101,8 +104,7 @@ class BoxEditorApp(ShowBase):
 
         self.world = self.render.attachNewNode("world")
         self.blocks_root = self.world.attachNewNode("blocks")
-        self.block_template = make_unit_cube("box-template")
-        self.block_nodes: dict[Cell, NodePath] = {}
+        self.chunk_meshes: dict[ChunkKey, ChunkMesh] = {}
         self.ground_node: NodePath | None = None
         self.bounds_node: NodePath | None = None
         self.hover_outline = make_cube_outline()
@@ -140,7 +142,6 @@ class BoxEditorApp(ShowBase):
         }
 
         self._setup_lights()
-        self._setup_collision_picker()
         self._setup_world()
         self._lift_player_out_of_blocks()
         self._setup_player_model()
@@ -180,7 +181,7 @@ class BoxEditorApp(ShowBase):
 
         sun = DirectionalLight("sun")
         sun.setColor((1.0, 0.94, 0.82, 1.0))
-        sun.setShadowCaster(True, 4096, 4096)
+        sun.setShadowCaster(True, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE)
         sun.setCameraMask(SHADOW_CAMERA_MASK)
         sun_lens = OrthographicLens()
         shadow_span = self._shadow_scene_span()
@@ -210,38 +211,22 @@ class BoxEditorApp(ShowBase):
     def _shadow_scene_span(self) -> float:
         return max(MIN_SHADOW_SPAN, math.sqrt(3.0) * self.box_map.size + SHADOW_PADDING)
 
-    def _setup_collision_picker(self) -> None:
-        self.picker = CollisionTraverser("picker")
-        self.pick_queue = CollisionHandlerQueue()
-        picker_node = CollisionNode("mouse-ray")
-        picker_node.setFromCollideMask(PICK_MASK)
-        picker_node.setIntoCollideMask(BitMask32.allOff())
-        self.pick_ray = CollisionRay()
-        picker_node.addSolid(self.pick_ray)
-        picker_path = self.camera.attachNewNode(picker_node)
-        self.picker.addCollider(picker_path, self.pick_queue)
-
     def _setup_world(self) -> None:
         self.ground_node.removeNode() if self.ground_node else None
         self.bounds_node.removeNode() if self.bounds_node else None
         self.blocks_root.removeNode()
         self.blocks_root = self.world.attachNewNode("blocks")
-        self.block_nodes.clear()
+        self.chunk_meshes.clear()
 
         size = self.box_map.size
         self.ground_node = make_checker_ground(size)
         self.ground_node.reparentTo(self.world)
-        ground_collision = CollisionNode("ground-collision")
-        ground_collision.addSolid(CollisionPlane(Plane(Vec3(0, 0, 1), Point3(0, 0, 0))))
-        ground_collision.setIntoCollideMask(PICK_MASK)
-        ground_collision_path = self.ground_node.attachNewNode(ground_collision)
-        ground_collision_path.setPythonTag("hit_type", "ground")
+        self.ground_node.hide(self.hover_shadow_mask)
 
         self.bounds_node = make_bounds(size)
         self.bounds_node.reparentTo(self.world)
         self.bounds_node.hide(self.hover_shadow_mask)
-        for cell, color in self.box_map.boxes.items():
-            self._add_block_node(cell, color)
+        self._rebuild_all_chunks()
 
     def _setup_player_model(self) -> None:
         self.player_model = self.render.attachNewNode("player")
@@ -561,11 +546,7 @@ class BoxEditorApp(ShowBase):
             return
         hit_type, cell, _normal, _point = hit
         if hit_type == "block" and cell is not None and self.box_map.remove_box(cell):
-            neighbors = self._neighbor_cells(cell)
-            self._remove_block_node(cell)
-            for neighbor in neighbors:
-                if neighbor in self.box_map.boxes:
-                    self._refresh_block_node(neighbor)
+            self._refresh_block_and_neighbors(cell)
             self.break_sound.play()
             self._set_status(f"Deleted {cell}")
 
@@ -710,12 +691,25 @@ class BoxEditorApp(ShowBase):
         if self._footprint_overlaps_ground(pos) and 0.0 <= pos.z + tolerance:
             support = 0.0
 
-        for cell in self.box_map.boxes:
-            top = cell[2] + 1.0
-            if top > pos.z + tolerance:
-                continue
-            if self._footprint_overlaps_cell(pos, cell):
-                support = top if support is None else max(support, top)
+        min_corner, max_corner = self._player_aabb(pos)
+        min_x = math.floor(min_corner.x)
+        max_x = math.floor(max_corner.x)
+        min_y = math.floor(min_corner.y)
+        max_y = math.floor(max_corner.y)
+        max_z = math.floor(pos.z + tolerance) - 1
+
+        for x in range(min_x, max_x + 1):
+            for y in range(min_y, max_y + 1):
+                for z in range(max_z, -1, -1):
+                    cell = (x, y, z)
+                    if cell not in self.box_map.boxes:
+                        continue
+                    top = z + 1.0
+                    if top > pos.z + tolerance:
+                        continue
+                    if self._footprint_overlaps_cell(pos, cell):
+                        support = top if support is None else max(support, top)
+                        break
         return support
 
     def _footprint_overlaps_ground(self, pos: Vec3) -> bool:
@@ -755,6 +749,28 @@ class BoxEditorApp(ShowBase):
             self.hover_outline.hide()
 
     def _pick(self) -> tuple[str, Cell | None, Vec3, Point3] | None:
+        ray = self._mouse_ray()
+        if ray is None:
+            return None
+        origin, direction = ray
+
+        hits: list[tuple[float, str, Cell | None, Vec3, Point3]] = []
+        block_hit = self._raycast_blocks(origin, direction)
+        if block_hit is not None:
+            distance, cell, normal, point = block_hit
+            hits.append((distance, "block", cell, normal, point))
+
+        ground_hit = self._raycast_ground(origin, direction)
+        if ground_hit is not None:
+            distance, point = ground_hit
+            hits.append((distance, "ground", None, Vec3(0, 0, 1), point))
+
+        if not hits:
+            return None
+        _distance, hit_type, cell, normal, point = min(hits, key=lambda item: item[0])
+        return hit_type, cell, normal, point
+
+    def _mouse_ray(self) -> tuple[Point3, Vec3] | None:
         if self.mouseWatcherNode is None:
             mouse_x, mouse_y = 0.0, 0.0
         elif self.mouse_captured or not self.mouseWatcherNode.hasMouse():
@@ -763,32 +779,120 @@ class BoxEditorApp(ShowBase):
             mouse = self.mouseWatcherNode.getMouse()
             mouse_x, mouse_y = mouse.x, mouse.y
 
-        self.pick_ray.setFromLens(self.camNode, mouse_x, mouse_y)
-        self.pick_queue.clearEntries()
-        self.picker.traverse(self.render)
-        if self.pick_queue.getNumEntries() == 0:
+        near_point = Point3()
+        far_point = Point3()
+        if not self.camLens.extrude(Point2(mouse_x, mouse_y), near_point, far_point):
             return None
-        self.pick_queue.sortEntries()
+        origin = self.render.getRelativePoint(self.camera, near_point)
+        far = self.render.getRelativePoint(self.camera, far_point)
+        direction = far - origin
+        if direction.lengthSquared() == 0:
+            return None
+        direction.normalize()
+        return origin, direction
 
-        for index in range(self.pick_queue.getNumEntries()):
-            collision_entry = self.pick_queue.getEntry(index)
-            into = collision_entry.getIntoNodePath()
-            hit_type = self._find_python_tag(into, "hit_type")
-            if not hit_type:
+    def _raycast_ground(self, origin: Point3, direction: Vec3) -> tuple[float, Point3] | None:
+        if abs(direction.z) < 1e-8:
+            return None
+        distance = -origin.z / direction.z
+        if distance < 0:
+            return None
+        point = Point3(origin + direction * distance)
+        if 0 <= point.x < self.box_map.size and 0 <= point.y < self.box_map.size:
+            return distance, point
+        return None
+
+    def _raycast_blocks(self, origin: Point3, direction: Vec3) -> tuple[float, Cell, Vec3, Point3] | None:
+        bounds = self._ray_box_intersection(origin, direction, 0.0, float(self.box_map.size))
+        if bounds is None:
+            return None
+        entry_distance, exit_distance, entry_normal = bounds
+        distance = max(0.0, entry_distance)
+        position = origin + direction * (distance + 1e-6)
+        size = self.box_map.size
+        cell = [
+            max(0, min(size - 1, math.floor(position.x))),
+            max(0, min(size - 1, math.floor(position.y))),
+            max(0, min(size - 1, math.floor(position.z))),
+        ]
+
+        steps: list[int] = []
+        next_distances: list[float] = []
+        delta_distances: list[float] = []
+        for axis in range(3):
+            component = direction[axis]
+            if component > 0:
+                steps.append(1)
+                next_boundary = cell[axis] + 1.0
+                next_distances.append((next_boundary - origin[axis]) / component)
+                delta_distances.append(1.0 / component)
+            elif component < 0:
+                steps.append(-1)
+                next_boundary = float(cell[axis])
+                next_distances.append((next_boundary - origin[axis]) / component)
+                delta_distances.append(-1.0 / component)
+            else:
+                steps.append(0)
+                next_distances.append(math.inf)
+                delta_distances.append(math.inf)
+
+        normal = Vec3(*entry_normal)
+        max_steps = size * 3 + 3
+        for _ in range(max_steps):
+            current = (cell[0], cell[1], cell[2])
+            if current in self.box_map.boxes:
+                point = Point3(origin + direction * distance)
+                return distance, current, normal, point
+
+            axis = min(range(3), key=lambda index: next_distances[index])
+            distance = next_distances[axis]
+            if distance > exit_distance:
+                return None
+
+            cell[axis] += steps[axis]
+            if cell[axis] < 0 or cell[axis] >= size:
+                return None
+            normal = Vec3(0, 0, 0)
+            normal[axis] = -steps[axis]
+            next_distances[axis] += delta_distances[axis]
+        return None
+
+    def _ray_box_intersection(
+        self,
+        origin: Point3,
+        direction: Vec3,
+        minimum: float,
+        maximum: float,
+    ) -> tuple[float, float, tuple[int, int, int]] | None:
+        entry = -math.inf
+        exit = math.inf
+        entry_normal = (0, 0, 0)
+        for axis in range(3):
+            component = direction[axis]
+            origin_value = origin[axis]
+            if abs(component) < 1e-8:
+                if origin_value < minimum or origin_value > maximum:
+                    return None
                 continue
-            cell = self._find_python_tag(into, "cell")
-            point = collision_entry.getSurfacePoint(self.render)
-            normal = collision_entry.getSurfaceNormal(self.render)
-            return str(hit_type), cell, normal, point
-        return None
 
-    def _find_python_tag(self, path: NodePath, tag: str):
-        current = path
-        while not current.isEmpty():
-            if current.hasPythonTag(tag):
-                return current.getPythonTag(tag)
-            current = current.getParent()
-        return None
+            near = (minimum - origin_value) / component
+            far = (maximum - origin_value) / component
+            near_normal_axis = -1
+            if near > far:
+                near, far = far, near
+                near_normal_axis = 1
+            if near > entry:
+                normal = [0, 0, 0]
+                normal[axis] = near_normal_axis
+                entry = near
+                entry_normal = (normal[0], normal[1], normal[2])
+            exit = min(exit, far)
+            if entry > exit:
+                return None
+
+        if exit < 0:
+            return None
+        return entry, exit, entry_normal
 
     def _placement_cell(
         self,
@@ -812,84 +916,97 @@ class BoxEditorApp(ShowBase):
         target = (cell[0] + offset[0], cell[1] + offset[1], cell[2] + offset[2])
         return target if self.box_map.in_bounds(target) else None
 
-    def _add_block_node(self, cell: Cell, color: RGBA) -> None:
-        block = self._make_block_visual(cell, color)
-        block.setPos(cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)
-        self._apply_block_render_state(block, color)
-        block.setPythonTag("hit_type", "block")
-        block.setPythonTag("cell", cell)
-
-        collision_node = CollisionNode(f"block-collision-{cell[0]}-{cell[1]}-{cell[2]}")
-        collision_node.addSolid(CollisionBox(Point3(0, 0, 0), 0.5, 0.5, 0.5))
-        collision_node.setIntoCollideMask(PICK_MASK)
-        collision_path = block.attachNewNode(collision_node)
-        collision_path.setPythonTag("hit_type", "block")
-        collision_path.setPythonTag("cell", cell)
-        self.block_nodes[cell] = block
-
-    def _make_block_visual(self, cell: Cell, color: RGBA) -> NodePath:
-        visible_faces = self._visible_faces_for_block(cell, color)
-        if visible_faces == set(FACE_NORMALS):
-            return self.block_template.copyTo(self.blocks_root)
-        block = make_unit_cube(f"box-{cell[0]}-{cell[1]}-{cell[2]}", visible_faces=visible_faces)
-        block.reparentTo(self.blocks_root)
-        return block
+    def _rebuild_all_chunks(self) -> None:
+        for mesh in self.chunk_meshes.values():
+            self._remove_chunk_mesh(mesh)
+        self.chunk_meshes.clear()
+        for key in {chunk_key_for_cell(cell) for cell in self.box_map.boxes}:
+            self._rebuild_chunk(key)
 
     def _visible_faces_for_block(self, cell: Cell, color: RGBA) -> set[FaceNormal]:
-        visible_faces = set(FACE_NORMALS)
-
-        for normal in FACE_NORMALS:
-            neighbor = (cell[0] + normal[0], cell[1] + normal[1], cell[2] + normal[2])
-            neighbor_color = self.box_map.get_box(neighbor)
-            if neighbor_color is not None and self._neighbor_hides_face(color, neighbor_color):
-                visible_faces.discard(normal)
-        return visible_faces
+        return visible_faces_for_cell(cell, color, self.box_map.boxes)
 
     def _neighbor_hides_face(self, color: RGBA, neighbor_color: RGBA) -> bool:
-        if color[3] >= 1.0 and neighbor_color[3] >= 1.0:
-            return True
-        return color[3] < 1.0 and neighbor_color[3] < 1.0 and neighbor_color == color
+        return neighbor_hides_face(color, neighbor_color)
 
     def _refresh_block_node(self, cell: Cell) -> None:
-        color = self.box_map.get_box(cell)
-        if color is None:
-            return
-        was_hovered = self.hovered_cell == cell
-        self._remove_block_node(cell)
-        self._add_block_node(cell, color)
-        if was_hovered:
-            self.hovered_cell = cell
+        self._rebuild_chunks_for_cells([cell])
 
     def _refresh_block_and_neighbors(self, cell: Cell) -> None:
-        self._refresh_block_node(cell)
-        for neighbor in self._neighbor_cells(cell):
-            if neighbor in self.box_map.boxes:
-                self._refresh_block_node(neighbor)
+        self._rebuild_chunks_for_cells([cell, *self._neighbor_cells(cell)])
 
     def _neighbor_cells(self, cell: Cell) -> list[Cell]:
         return [(cell[0] + normal[0], cell[1] + normal[1], cell[2] + normal[2]) for normal in FACE_NORMALS]
 
-    def _apply_block_render_state(self, block: NodePath, color: RGBA) -> None:
-        block.setColor(*color)
-        if color[3] < 1.0:
-            block.setTransparency(TransparencyAttrib.MAlpha)
-            block.setBin("transparent", 0)
-            block.setDepthWrite(False)
-            block.hide(self.hover_shadow_mask)
-            return
-
-        block.clearTransparency()
-        block.clearBin()
-        block.clearDepthWrite()
-        block.show(self.hover_shadow_mask)
+    def _rebuild_chunks_for_cells(self, cells: list[Cell]) -> None:
+        chunk_keys = {chunk_key_for_cell(cell) for cell in cells if self._cell_can_affect_chunk(cell)}
+        for key in chunk_keys:
+            self._rebuild_chunk(key)
 
     def _remove_block_node(self, cell: Cell) -> None:
-        node = self.block_nodes.pop(cell, None)
-        if node:
-            node.removeNode()
+        self._rebuild_chunks_for_cells([cell])
         if self.hovered_cell == cell:
             self.hovered_cell = None
             self.hover_outline.hide()
+
+    def _cell_can_affect_chunk(self, cell: Cell) -> bool:
+        return 0 <= cell[0] < self.box_map.size and 0 <= cell[1] < self.box_map.size and 0 <= cell[2] < self.box_map.size
+
+    def _rebuild_chunk(self, key: ChunkKey) -> None:
+        old_mesh = self.chunk_meshes.pop(key, None)
+        if old_mesh is not None:
+            self._remove_chunk_mesh(old_mesh)
+
+        mesh = build_chunk_mesh(self.box_map.boxes, key, self.box_map.size, CHUNK_SIZE)
+        if mesh.stats.source_blocks == 0:
+            return
+        if mesh.opaque:
+            mesh.opaque.reparentTo(self.blocks_root)
+            mesh.opaque.show(self.hover_shadow_mask)
+        if mesh.transparent:
+            mesh.transparent.reparentTo(self.blocks_root)
+            mesh.transparent.setTransparency(TransparencyAttrib.MAlpha)
+            mesh.transparent.setBin("transparent", 0)
+            mesh.transparent.setDepthWrite(False)
+            mesh.transparent.hide(self.hover_shadow_mask)
+        self.chunk_meshes[key] = mesh
+
+    def _remove_chunk_mesh(self, mesh: ChunkMesh) -> None:
+        if mesh.opaque:
+            mesh.opaque.removeNode()
+        if mesh.transparent:
+            mesh.transparent.removeNode()
+
+    def _chunk_stats(self) -> dict[str, int]:
+        stats = {
+            "chunks": len(self.chunk_meshes),
+            "source_blocks": 0,
+            "visible_faces": 0,
+            "merged_quads": 0,
+            "opaque_quads": 0,
+            "transparent_quads": 0,
+        }
+        for mesh in self.chunk_meshes.values():
+            stats["source_blocks"] += mesh.stats.source_blocks
+            stats["visible_faces"] += mesh.stats.visible_faces
+            stats["merged_quads"] += mesh.stats.merged_quads
+            stats["opaque_quads"] += mesh.stats.opaque_quads
+            stats["transparent_quads"] += mesh.stats.transparent_quads
+        return stats
+
+    def _merged_quad_count_for_cell(self, cell: Cell) -> int:
+        mesh = self.chunk_meshes.get(chunk_key_for_cell(cell))
+        return mesh.stats.merged_quads if mesh else 0
+
+    def _vertex_count_for_cell_chunk(self, cell: Cell) -> int:
+        mesh = self.chunk_meshes.get(chunk_key_for_cell(cell))
+        if mesh is None:
+            return 0
+        count = 0
+        for node in (mesh.opaque, mesh.transparent):
+            if node and node.node().getNumGeoms() > 0:
+                count += node.node().getGeom(0).getVertexData().getNumRows()
+        return count
 
     def _open_color_editor(self, cell: Cell) -> None:
         color = self.box_map.get_box(cell)
@@ -1006,11 +1123,7 @@ class BoxEditorApp(ShowBase):
         edited = self.color_target
         if rgba[3] <= 0.0:
             if self.box_map.remove_box(edited):
-                neighbors = self._neighbor_cells(edited)
-                self._remove_block_node(edited)
-                for neighbor in neighbors:
-                    if neighbor in self.box_map.boxes:
-                        self._refresh_block_node(neighbor)
+                self._refresh_block_and_neighbors(edited)
                 self.break_sound.play()
             self._close_color_editor()
             self._set_status(f"Deleted {edited}")

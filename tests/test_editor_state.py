@@ -288,6 +288,34 @@ def test_look_at_editor_focus_points_camera_at_target(tmp_path):
         app.destroy()
 
 
+def test_voxel_raycast_hits_block_face_for_placement(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 1)}))
+    try:
+        hit = app._raycast_blocks(Point3(0.5, 2.5, 0.5), Vec3(0, -1, 0))
+
+        assert hit is not None
+        _distance, cell, normal, point = hit
+        assert cell == (0, 0, 0)
+        assert normal == Vec3(0, 1, 0)
+        assert point.y == pytest.approx(1.0)
+        assert app._placement_cell("block", cell, normal, point) == (0, 1, 0)
+    finally:
+        app.destroy()
+
+
+def test_voxel_raycast_hits_ground_for_placement(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        hit = app._raycast_ground(Point3(1.5, 0.5, 3.0), Vec3(0, 0, -1))
+
+        assert hit is not None
+        _distance, point = hit
+        assert point == Point3(1.5, 0.5, 0.0)
+        assert app._placement_cell("ground", None, Vec3(0, 0, 1), point) == (1, 0, 0)
+    finally:
+        app.destroy()
+
+
 def test_color_editor_focuses_rgba_by_default_and_tabs_between_fields(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 1)}))
     try:
@@ -371,7 +399,9 @@ def test_shadow_camera_covers_large_maps(tmp_path):
 def test_transparent_blocks_use_alpha_rendering_and_no_shadow(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 0.5)}))
     try:
-        node = app.block_nodes[(0, 0, 0)]
+        mesh = next(iter(app.chunk_meshes.values()))
+        node = mesh.transparent
+        assert node is not None
         state = node.getState()
 
         assert node.getTransparency() == TransparencyAttrib.MAlpha
@@ -380,11 +410,15 @@ def test_transparent_blocks_use_alpha_rendering_and_no_shadow(tmp_path):
         assert node.isHidden(app.hover_shadow_mask)
         assert not node.isHidden(app.camNode.getCameraMask())
 
-        app._apply_block_render_state(node, (1, 1, 1, 1))
-        assert node.getTransparency() == TransparencyAttrib.MNone
-        assert node.getState().getAttrib(CullBinAttrib) is None
-        assert node.getState().getAttrib(DepthWriteAttrib) is None
-        assert not node.isHidden(app.hover_shadow_mask)
+        app.box_map.set_box((0, 0, 0), (1, 1, 1, 1))
+        app._refresh_block_and_neighbors((0, 0, 0))
+        mesh = next(iter(app.chunk_meshes.values()))
+        assert mesh.transparent is None
+        assert mesh.opaque is not None
+        assert mesh.opaque.getTransparency() == TransparencyAttrib.MNone
+        assert mesh.opaque.getState().getAttrib(CullBinAttrib) is None
+        assert mesh.opaque.getState().getAttrib(DepthWriteAttrib) is None
+        assert not mesh.opaque.isHidden(app.hover_shadow_mask)
     finally:
         app.destroy()
 
@@ -397,8 +431,8 @@ def test_block_alpha_changes_rendered_opacity(tmp_path):
         app.pitch = 0
 
         def center_red_for_alpha(alpha):
-            node = app.block_nodes[(0, 0, 0)]
-            app._apply_block_render_state(node, (1, 0, 0, alpha))
+            app.box_map.set_box((0, 0, 0), (1, 0, 0, alpha))
+            app._refresh_block_and_neighbors((0, 0, 0))
             app._update_camera()
             app.graphicsEngine.renderFrame()
             app.graphicsEngine.renderFrame()
@@ -420,11 +454,11 @@ def test_identical_adjacent_transparent_blocks_omit_shared_faces(tmp_path):
     color = (1, 0, 0, 0.5)
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): color, (1, 0, 0): color}))
     try:
-        left_geom = app.block_nodes[(0, 0, 0)].node().getGeom(0)
-        right_geom = app.block_nodes[(1, 0, 0)].node().getGeom(0)
+        stats = app._chunk_stats()
 
-        assert left_geom.getVertexData().getNumRows() == 20
-        assert right_geom.getVertexData().getNumRows() == 20
+        assert stats["visible_faces"] == 10
+        assert stats["merged_quads"] == 6
+        assert stats["transparent_quads"] == 6
     finally:
         app.destroy()
 
@@ -441,11 +475,11 @@ def test_different_adjacent_transparent_blocks_keep_shared_faces(tmp_path):
         ),
     )
     try:
-        left_geom = app.block_nodes[(0, 0, 0)].node().getGeom(0)
-        right_geom = app.block_nodes[(1, 0, 0)].node().getGeom(0)
+        stats = app._chunk_stats()
 
-        assert left_geom.getVertexData().getNumRows() == 24
-        assert right_geom.getVertexData().getNumRows() == 24
+        assert stats["visible_faces"] == 12
+        assert stats["merged_quads"] == 12
+        assert stats["transparent_quads"] == 12
     finally:
         app.destroy()
 
@@ -462,11 +496,24 @@ def test_opaque_adjacent_blocks_omit_shared_faces(tmp_path):
         ),
     )
     try:
-        left_geom = app.block_nodes[(0, 0, 0)].node().getGeom(0)
-        right_geom = app.block_nodes[(1, 0, 0)].node().getGeom(0)
+        stats = app._chunk_stats()
 
-        assert left_geom.getVertexData().getNumRows() == 20
-        assert right_geom.getVertexData().getNumRows() == 20
+        assert stats["visible_faces"] == 10
+        assert stats["merged_quads"] == 10
+        assert stats["opaque_quads"] == 10
+    finally:
+        app.destroy()
+
+
+def test_greedy_mesh_merges_same_color_opaque_faces(tmp_path):
+    color = (1, 0, 0, 1)
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): color, (1, 0, 0): color}))
+    try:
+        stats = app._chunk_stats()
+
+        assert stats["visible_faces"] == 10
+        assert stats["merged_quads"] == 6
+        assert stats["opaque_quads"] == 6
     finally:
         app.destroy()
 
@@ -483,13 +530,13 @@ def test_opaque_shared_faces_refresh_when_neighbor_is_deleted(tmp_path):
         ),
     )
     try:
-        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 20
+        assert app._chunk_stats()["visible_faces"] == 10
 
         app.box_map.remove_box((1, 0, 0))
-        app._remove_block_node((1, 0, 0))
         app._refresh_block_and_neighbors((1, 0, 0))
 
-        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 24
+        assert app._chunk_stats()["visible_faces"] == 6
+        assert app._chunk_stats()["merged_quads"] == 6
     finally:
         app.destroy()
 
@@ -498,13 +545,13 @@ def test_transparent_shared_faces_refresh_when_color_changes(tmp_path):
     color = (1, 0, 0, 0.5)
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): color, (1, 0, 0): color}))
     try:
-        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 20
+        assert app._chunk_stats()["visible_faces"] == 10
 
         app.box_map.set_box((1, 0, 0), (0, 1, 0, 0.5))
         app._refresh_block_and_neighbors((1, 0, 0))
 
-        assert app.block_nodes[(0, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 24
-        assert app.block_nodes[(1, 0, 0)].node().getGeom(0).getVertexData().getNumRows() == 24
+        assert app._chunk_stats()["visible_faces"] == 12
+        assert app._chunk_stats()["merged_quads"] == 12
     finally:
         app.destroy()
 

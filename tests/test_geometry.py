@@ -1,6 +1,7 @@
 from panda3d.core import GeomVertexReader, Vec3
 
 from box_editor_view.geometry import make_unit_cube
+from box_editor_view.voxel_mesh import build_chunk_mesh
 
 
 def test_cube_face_winding_matches_normals():
@@ -28,3 +29,36 @@ def test_unit_cube_can_omit_selected_faces():
     cube = make_unit_cube(visible_faces={(1, 0, 0), (0, 1, 0)})
     geom = cube.node().getGeom(0)
     assert geom.getVertexData().getNumRows() == 8
+
+
+def test_chunk_mesh_greedily_merges_same_color_faces():
+    mesh = build_chunk_mesh(
+        {
+            (0, 0, 0): (1, 0, 0, 1),
+            (1, 0, 0): (1, 0, 0, 1),
+        },
+        (0, 0, 0),
+        2,
+    )
+
+    assert mesh.stats.source_blocks == 2
+    assert mesh.stats.visible_faces == 10
+    assert mesh.stats.merged_quads == 6
+    assert mesh.opaque is not None
+    assert mesh.opaque.node().getGeom(0).getVertexData().getNumRows() == 24
+
+
+def test_chunk_mesh_keeps_different_transparent_faces_separate():
+    mesh = build_chunk_mesh(
+        {
+            (0, 0, 0): (1, 0, 0, 0.5),
+            (1, 0, 0): (1, 0, 0, 0.75),
+        },
+        (0, 0, 0),
+        2,
+    )
+
+    assert mesh.stats.visible_faces == 12
+    assert mesh.stats.merged_quads == 12
+    assert mesh.stats.transparent_quads == 12
+    assert mesh.transparent is not None
