@@ -1,21 +1,31 @@
-import json
+import sqlite3
 
 import pytest
 
-from box_editor_view.box_file import BoxFormatError, BoxMap, load_box, save_box
+from box_editor_view.box_file import BOX_SCHEMA_VERSION, BoxFormatError, BoxMap, load_box, save_box
 
 
-def test_sparse_round_trip_omits_empty_cells(tmp_path):
+def test_sparse_round_trip_uses_sqlite_and_omits_empty_cells(tmp_path):
     box_map = BoxMap(n=2)
     assert box_map.set_box((1, 2, 3), (0.1, 0.2, 0.3, 0.4))
+    assert box_map.set_box((2, 2, 3), (0.1, 0.2, 0.3, 0.4))
     assert not box_map.set_box((4, 0, 0), (1, 1, 1, 1))
 
     path = tmp_path / "sample.box"
     save_box(path, box_map)
 
-    data = json.loads(path.read_text(encoding="utf-8"))
-    assert data == {"N": 2, "boxes": {"1,2,3": [26, 51, 76, 102]}}
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT value FROM metadata WHERE key = 'schema_version'").fetchone()[0] == str(
+            BOX_SCHEMA_VERSION
+        )
+        assert connection.execute("SELECT value FROM metadata WHERE key = 'N'").fetchone()[0] == "2"
+        assert connection.execute("SELECT color_id, r, g, b, a FROM palette").fetchall() == [(1, 26, 51, 76, 102)]
+        assert connection.execute("SELECT x, y, z, color_id FROM boxes ORDER BY x, y, z").fetchall() == [
+            (1, 2, 3, 1),
+            (2, 2, 3, 1),
+        ]
     assert load_box(path).boxes[(1, 2, 3)] == pytest.approx((26 / 255, 51 / 255, 76 / 255, 102 / 255))
+    assert load_box(path).boxes[(2, 2, 3)] == pytest.approx((26 / 255, 51 / 255, 76 / 255, 102 / 255))
 
 
 def test_n_must_be_between_zero_and_five():
@@ -27,24 +37,144 @@ def test_n_must_be_between_zero_and_five():
         BoxMap(n=6)
 
 
-def test_loader_accepts_255_rgba_and_list_entries():
-    box_map = BoxMap.from_json_dict(
-        {
-            "N": 1,
-            "boxes": [
-                {"pos": [0, 0, 0], "rgba": [128, 64, 32, 255]},
-                {"x": 1, "y": 1, "z": 1, "color": [0.25, 0.5, 0.75, 1]},
-            ],
-        }
+def test_loader_rejects_legacy_sqlite_rows_without_palette(tmp_path):
+    path = tmp_path / "rows.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                r INTEGER NOT NULL CHECK (r BETWEEN 0 AND 255),
+                g INTEGER NOT NULL CHECK (g BETWEEN 0 AND 255),
+                b INTEGER NOT NULL CHECK (b BETWEEN 0 AND 255),
+                a INTEGER NOT NULL CHECK (a BETWEEN 1 AND 255),
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '1'), ('N', '1');
+            INSERT INTO boxes (x, y, z, r, g, b, a) VALUES
+                (0, 0, 0, 128, 64, 32, 255),
+                (1, 1, 1, 64, 128, 191, 255);
+            """
+        )
+
+    with pytest.raises(BoxFormatError, match="unsupported .box schema version 1"):
+        load_box(path)
+
+
+def test_loader_accepts_palette_rows(tmp_path):
+    path = tmp_path / "palette.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            f"""
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL REFERENCES palette(color_id),
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '{BOX_SCHEMA_VERSION}'), ('N', '1');
+            INSERT INTO palette (color_id, r, g, b, a) VALUES (1, 0, 0, 0, 1), (2, 255, 255, 255, 128);
+            INSERT INTO boxes (x, y, z, color_id) VALUES (0, 0, 0, 1), (1, 1, 1, 2);
+            """
+        )
+
+    box_map = load_box(path)
+
+    assert box_map.boxes[(0, 0, 0)] == pytest.approx((0, 0, 0, 1 / 255))
+    assert box_map.boxes[(1, 1, 1)] == pytest.approx((1, 1, 1, 128 / 255))
+
+
+def test_loader_rejects_missing_palette_color(tmp_path):
+    path = tmp_path / "missing-color.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            f"""
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL,
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '{BOX_SCHEMA_VERSION}'), ('N', '1');
+            INSERT INTO boxes (x, y, z, color_id) VALUES (0, 0, 0, 7);
+            """
+        )
+
+    with pytest.raises(BoxFormatError, match="missing palette color_id"):
+        load_box(path)
+
+
+def test_unused_palette_colors_are_not_saved(tmp_path):
+    box_map = BoxMap(
+        n=1,
+        boxes={
+            (0, 0, 0): (1, 0, 0, 1),
+            (1, 1, 1): (0, 1, 0, 1),
+        },
     )
+    path = tmp_path / "compact.box"
+    save_box(path, box_map)
 
-    assert box_map.boxes[(0, 0, 0)] == pytest.approx((128 / 255, 64 / 255, 32 / 255, 1))
-    assert box_map.boxes[(1, 1, 1)] == (0.25, 0.5, 0.75, 1.0)
+    box_map.remove_box((1, 1, 1))
+    save_box(path, box_map)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT r, g, b, a FROM palette").fetchall() == [(255, 0, 0, 255)]
+        assert connection.execute("SELECT x, y, z, color_id FROM boxes").fetchall() == [(0, 0, 0, 1)]
 
 
-def test_loader_rejects_out_of_bounds_boxes():
+def test_loader_rejects_out_of_bounds_boxes(tmp_path):
+    path = tmp_path / "bad.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL,
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '2'), ('N', '1');
+            INSERT INTO palette (color_id, r, g, b, a) VALUES (1, 1, 1, 1, 255);
+            INSERT INTO boxes (x, y, z, color_id) VALUES (2, 0, 0, 1);
+            """
+        )
+
     with pytest.raises(BoxFormatError):
-        BoxMap.from_json_dict({"N": 1, "boxes": {"2,0,0": [1, 1, 1, 1]}})
+        load_box(path)
 
 
 def test_alpha_zero_removes_and_is_not_saved(tmp_path):
@@ -56,10 +186,82 @@ def test_alpha_zero_removes_and_is_not_saved(tmp_path):
 
     path = tmp_path / "alpha.box"
     save_box(path, box_map)
-    assert json.loads(path.read_text(encoding="utf-8")) == {"N": 1, "boxes": {}}
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 0
 
 
-def test_default_color_uses_255_alpha():
+def test_default_color_uses_255_alpha(tmp_path):
     box_map = BoxMap(n=1)
     assert box_map.set_box((0, 0, 0), (140, 140, 140, 255))
-    assert box_map.to_json_dict()["boxes"] == {"0,0,0": [140, 140, 140, 255]}
+
+    path = tmp_path / "default.box"
+    save_box(path, box_map)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("SELECT r, g, b, a FROM palette").fetchone() == (140, 140, 140, 255)
+        assert connection.execute("SELECT color_id FROM boxes").fetchone() == (1,)
+
+
+def test_loader_rejects_json_text_files(tmp_path):
+    path = tmp_path / "old-json.box"
+    path.write_text('{"N": 1, "boxes": {}}', encoding="utf-8")
+
+    with pytest.raises(BoxFormatError):
+        load_box(path)
+
+
+def test_loader_rejects_non_numeric_schema_version(tmp_path):
+    path = tmp_path / "bad-version.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL,
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', 'dev'), ('N', '1');
+            """
+        )
+
+    with pytest.raises(BoxFormatError, match="invalid .box schema version"):
+        load_box(path)
+
+
+def test_loader_rejects_unsupported_schema_version(tmp_path):
+    path = tmp_path / "unsupported.box"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL,
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '1'), ('N', '1');
+            """
+        )
+
+    with pytest.raises(BoxFormatError, match="unsupported .box schema version 1"):
+        load_box(path)

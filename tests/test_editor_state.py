@@ -58,6 +58,36 @@ def test_shift_left_click_no_longer_opens_color_editor(tmp_path):
         app.destroy()
 
 
+def test_middle_click_picks_clicked_block_color(tmp_path):
+    color = (0.25, 0.5, 0.75, 0.5)
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): color}))
+    try:
+        app.current_color = (1, 0, 0, 1)
+        app.mouse_captured = True
+        app._pick = lambda: ("block", (0, 0, 0), Vec3(0, 0, 1), Vec3(0, 0, 0))
+
+        app._pick_clicked_block_color()
+
+        assert app.current_color == pytest.approx((64 / 255, 128 / 255, 191 / 255, 128 / 255))
+        assert app.box_map.get_box((0, 0, 0)) == pytest.approx((64 / 255, 128 / 255, 191 / 255, 128 / 255))
+    finally:
+        app.destroy()
+
+
+def test_middle_click_ignores_ground_hit(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (0, 1, 0, 1)}))
+    try:
+        original_color = app.current_color
+        app.mouse_captured = True
+        app._pick = lambda: ("ground", None, Vec3(0, 0, 1), Vec3(0, 0, 0))
+
+        app._pick_clicked_block_color()
+
+        assert app.current_color == original_color
+    finally:
+        app.destroy()
+
+
 def test_player_camera_and_collision_dimensions_are_not_tiny():
     assert 0.9 <= editor.PLAYER_WIDTH <= 1.0
     assert editor.PLAYER_HEIGHT <= 2.0
@@ -284,6 +314,111 @@ def test_look_at_editor_focus_points_camera_at_target(tmp_path):
         expected = Vec3(target.x - eye.x, target.y - eye.y, target.z - eye.z)
         expected.normalize()
         assert forward.dot(expected) > 0.999
+    finally:
+        app.destroy()
+
+
+def test_n_editor_changes_larger_n_without_delete_confirm(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(1, 1, 1): (1, 0, 0, 1)}))
+    try:
+        app._open_n_editor()
+        app._change_pending_n(1)
+        app._confirm_n_editor()
+
+        assert app.modal_mode is None
+        assert app.box_map.n == 2
+        assert app.box_map.size == 4
+        assert app.box_map.get_box((1, 1, 1)) == (1, 0, 0, 1)
+        assert app._chunk_stats()["source_blocks"] == 1
+    finally:
+        app.destroy()
+
+
+def test_n_editor_arrow_buttons_clamp_to_allowed_range(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        app._open_n_editor()
+        assert all(button["text"] == "" for button in app.n_arrow_buttons)
+        assert len(app.n_arrow_icons) == 2
+        assert all(icon.node().getNumGeoms() == 1 for icon in app.n_arrow_icons)
+
+        for _ in range(10):
+            app._change_pending_n(-1)
+        assert app.pending_n == editor.MIN_N
+
+        for _ in range(10):
+            app._change_pending_n(1)
+        assert app.pending_n == editor.MAX_N
+
+        app._close_n_editor()
+    finally:
+        app.destroy()
+
+
+def test_n_editor_shrink_cancel_keeps_out_of_bounds_cubes(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=2, boxes={(0, 0, 0): (1, 0, 0, 1), (3, 3, 3): (0, 1, 0, 1)}))
+    try:
+        app._open_n_editor()
+        app._change_pending_n(-1)
+        app._confirm_n_editor()
+
+        assert app.modal_mode == "n-confirm"
+        app._cancel_shrink_n_change()
+
+        assert app.modal_mode == "n"
+        assert app.box_map.n == 2
+        assert app.box_map.get_box((3, 3, 3)) == (0, 1, 0, 1)
+
+        app._close_n_editor()
+    finally:
+        app.destroy()
+
+
+def test_n_editor_enter_confirms_pending_shrink(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=2, boxes={(0, 0, 0): (1, 0, 0, 1), (3, 3, 3): (0, 1, 0, 1)}))
+    try:
+        app._open_n_editor()
+        app._change_pending_n(-1)
+        app._submit_color_input()
+        assert app.modal_mode == "n-confirm"
+
+        app._submit_color_input()
+
+        assert app.modal_mode is None
+        assert app.box_map.n == 1
+        assert app.box_map.get_box((3, 3, 3)) is None
+    finally:
+        app.destroy()
+
+
+def test_n_editor_shrink_confirm_removes_out_of_bounds_cubes(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=2, boxes={(0, 0, 0): (1, 0, 0, 1), (3, 3, 3): (0, 1, 0, 1)}))
+    try:
+        app._open_n_editor()
+        app._change_pending_n(-1)
+        app._confirm_n_editor()
+        app._confirm_shrink_n_change()
+
+        assert app.modal_mode is None
+        assert app.box_map.n == 1
+        assert app.box_map.size == 2
+        assert app.box_map.get_box((0, 0, 0)) == (1, 0, 0, 1)
+        assert app.box_map.get_box((3, 3, 3)) is None
+        assert app._chunk_stats()["source_blocks"] == 1
+    finally:
+        app.destroy()
+
+
+def test_n_editor_shrink_without_deleted_cubes_skips_confirm(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=2, boxes={(1, 1, 1): (1, 0, 0, 1)}))
+    try:
+        app._open_n_editor()
+        app._change_pending_n(-1)
+        app._confirm_n_editor()
+
+        assert app.modal_mode is None
+        assert app.box_map.n == 1
+        assert app.box_map.get_box((1, 1, 1)) == (1, 0, 0, 1)
     finally:
         app.destroy()
 

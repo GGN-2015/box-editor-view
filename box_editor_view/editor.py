@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 import re
@@ -16,6 +15,12 @@ from panda3d.core import (
     BitMask32,
     DirectionalLight,
     Filename,
+    Geom,
+    GeomNode,
+    GeomTriangles,
+    GeomVertexData,
+    GeomVertexFormat,
+    GeomVertexWriter,
     OrthographicLens,
     LineSegs,
     NodePath,
@@ -28,7 +33,7 @@ from panda3d.core import (
 )
 
 from .audio import ensure_sound_files
-from .box_file import BoxFormatError, BoxMap, Cell, DEFAULT_COLOR, RGBA, load_box, save_box
+from .box_file import BoxFormatError, BoxMap, Cell, DEFAULT_COLOR, MAX_N, MIN_N, RGBA, load_box, save_box
 from .geometry import FaceNormal, make_bounds, make_checker_ground, make_cube_outline, make_cuboid
 from .gpu import GpuProfile, detect_gpu_profile
 from .voxel_mesh import (
@@ -123,11 +128,17 @@ class BoxEditorApp(ShowBase):
         self.modal_mode: str | None = None
         self.color_panel: DirectFrame | None = None
         self.help_panel: DirectFrame | None = None
+        self.n_panel: DirectFrame | None = None
+        self.n_confirm_panel: DirectFrame | None = None
         self.quit_panel: DirectFrame | None = None
+        self.n_value_label: DirectLabel | None = None
+        self.n_arrow_buttons: list[DirectButton] = []
+        self.n_arrow_icons: list[NodePath] = []
         self.color_fields: dict[str, str] = {}
         self.color_field_widgets: dict[str, DirectButton] = {}
         self.active_color_field = "rgba"
         self.color_target: Cell | None = None
+        self.pending_n = self.box_map.n
         self.quit_button_frames: dict[str, DirectFrame] = {}
         self.quit_buttons: dict[str, DirectButton] = {}
         self.active_quit_choice = "cancel"
@@ -170,7 +181,7 @@ class BoxEditorApp(ShowBase):
         self.camLens.setAspectRatio(width / height)
 
     def _current_map_snapshot(self) -> str:
-        return json.dumps(self.box_map.to_json_dict(), sort_keys=True, separators=(",", ":"))
+        return repr((self.box_map.n, tuple(sorted(self.box_map.boxes.items()))))
 
     def _has_unsaved_changes(self) -> bool:
         return self.saved_snapshot != self._current_map_snapshot()
@@ -214,6 +225,15 @@ class BoxEditorApp(ShowBase):
 
     def _shadow_scene_span(self) -> float:
         return max(MIN_SHADOW_SPAN, math.sqrt(3.0) * self.box_map.size + SHADOW_PADDING)
+
+    def _sync_shadow_lens(self) -> None:
+        if not hasattr(self, "sun_lens") or not hasattr(self, "sun_path"):
+            return
+        shadow_span = self._shadow_scene_span()
+        self.sun_lens.setFilmSize(shadow_span, shadow_span)
+        self.sun_lens.setNearFar(-shadow_span, shadow_span)
+        center = self.box_map.size * 0.5
+        self.sun_path.setPos(center, center, center)
 
     def _setup_world(self) -> None:
         self.ground_node.removeNode() if self.ground_node else None
@@ -337,6 +357,7 @@ class BoxEditorApp(ShowBase):
             self.accept(event, self._set_key, [name, value])
 
         self.accept("mouse1", self._delete_clicked_block)
+        self.accept("mouse2", self._pick_clicked_block_color)
         self.accept("mouse3", self._right_click)
         self.accept("escape", self._release_mouse_capture)
         self.accept("window-event", self._handle_window_event)
@@ -346,6 +367,7 @@ class BoxEditorApp(ShowBase):
         self.accept("e", self._edit_target_block_color)
         self.accept("h", self._open_help)
         self.accept("c", self._look_at_editor_focus)
+        self.accept("n", self._open_n_editor)
         self._bind_color_input_events()
 
     def _setup_close_request_event(self) -> None:
@@ -555,6 +577,27 @@ class BoxEditorApp(ShowBase):
             self.break_sound.play()
             self._set_status(f"Deleted {cell}")
 
+    def _pick_clicked_block_color(self) -> None:
+        if self.ui_open:
+            return
+        if not self.mouse_captured:
+            self.set_mouse_capture(True)
+            self._set_status("Mouse captured")
+            return
+        hit = self._pick()
+        if hit is None:
+            return
+        hit_type, cell, _normal, _point = hit
+        if hit_type != "block" or cell is None:
+            return
+
+        color = self.box_map.get_box(cell)
+        if color is None:
+            return
+        self.current_color = color
+        picked = ", ".join(str(round(channel * 255)) for channel in color)
+        self._set_status(f"Picked color ({picked})")
+
     def _edit_target_block_color(self) -> None:
         if self.ui_open:
             return
@@ -637,7 +680,9 @@ class BoxEditorApp(ShowBase):
                     "Shift: move downward",
                     "Right click: place cube",
                     "Left click: delete cube",
+                    "Middle click: pick cube color",
                     "E: edit cube RGBA",
+                    "N: change map size N",
                     "C: look at editor center / cube centroid",
                     "F5: switch first/third person",
                     "F2 or Ctrl+S: save",
@@ -676,6 +721,219 @@ class BoxEditorApp(ShowBase):
         self.crosshair.show()
         self.set_mouse_capture(True)
         self._set_status("Ready")
+
+    def _open_n_editor(self) -> None:
+        if self.ui_open:
+            return
+
+        self.ui_open = True
+        self.modal_mode = "n"
+        self.pending_n = self.box_map.n
+        self._clear_movement_keys()
+        self.set_mouse_capture(False)
+        self.crosshair.hide()
+
+        self.n_panel = DirectFrame(
+            frameColor=(0.05, 0.06, 0.07, 0.97),
+            frameSize=(-0.48, 0.48, -0.38, 0.38),
+            pos=(0, 0, 0),
+        )
+        DirectLabel(
+            parent=self.n_panel,
+            text="Map Size N",
+            text_fg=(1, 1, 1, 1),
+            text_scale=0.058,
+            frameColor=(0, 0, 0, 0),
+            pos=(0, 0, 0.25),
+        )
+        DirectLabel(
+            parent=self.n_panel,
+            text=f"Range {MIN_N}..{MAX_N}",
+            text_fg=(0.82, 0.86, 0.90, 1),
+            text_scale=0.032,
+            frameColor=(0, 0, 0, 0),
+            pos=(0, 0, 0.17),
+        )
+        self.n_value_label = DirectLabel(
+            parent=self.n_panel,
+            text=str(self.pending_n),
+            text_fg=(1, 1, 1, 1),
+            text_scale=0.088,
+            frameColor=(0.12, 0.15, 0.18, 1),
+            frameSize=(-0.12, 0.12, -0.075, 0.075),
+            pos=(0, 0, 0.02),
+        )
+        self.n_arrow_buttons = []
+        self.n_arrow_icons = []
+        self._n_arrow_button(True, (0.20, 0, 0.08), 1)
+        self._n_arrow_button(False, (0.20, 0, -0.07), -1)
+        self._n_dialog_button("OK", (-0.16, 0, -0.25), self._confirm_n_editor)
+        self._n_dialog_button("Cancel", (0.16, 0, -0.25), self._close_n_editor)
+        self._set_status("Edit N")
+
+    def _n_arrow_button(self, points_up: bool, pos: tuple[float, float, float], direction: int) -> DirectButton:
+        button = DirectButton(
+            parent=self.n_panel,
+            text="",
+            frameSize=(-0.055, 0.055, -0.045, 0.055),
+            frameColor=(0.24, 0.29, 0.34, 1),
+            pos=pos,
+            command=self._change_pending_n,
+            extraArgs=[direction],
+        )
+        icon = self._make_n_arrow_icon(points_up)
+        icon.reparentTo(button)
+        self.n_arrow_buttons.append(button)
+        self.n_arrow_icons.append(icon)
+        return button
+
+    def _make_n_arrow_icon(self, points_up: bool) -> NodePath:
+        vertex_data = GeomVertexData("n-arrow", GeomVertexFormat.getV3c4(), Geom.UHStatic)
+        vertex_writer = GeomVertexWriter(vertex_data, "vertex")
+        color_writer = GeomVertexWriter(vertex_data, "color")
+        vertices = ((0.0, 0.0, 0.030), (-0.032, 0.0, -0.023), (0.032, 0.0, -0.023))
+        if not points_up:
+            vertices = tuple((x, y, -z) for x, y, z in vertices)
+        for vertex in vertices:
+            vertex_writer.addData3f(*vertex)
+            color_writer.addData4f(1.0, 1.0, 1.0, 1.0)
+
+        triangles = GeomTriangles(Geom.UHStatic)
+        triangles.addVertices(0, 1, 2)
+        geom = Geom(vertex_data)
+        geom.addPrimitive(triangles)
+        node = GeomNode("n-arrow")
+        node.addGeom(geom)
+        return NodePath(node)
+
+    def _n_dialog_button(self, text: str, pos: tuple[float, float, float], command: Callable[[], None]) -> DirectButton:
+        return DirectButton(
+            parent=self.n_panel,
+            text=text,
+            text_scale=0.039,
+            frameSize=(-0.12, 0.12, -0.048, 0.055),
+            frameColor=(0.24, 0.29, 0.34, 1),
+            text_fg=(1, 1, 1, 1),
+            pos=pos,
+            command=command,
+        )
+
+    def _change_pending_n(self, direction: int) -> None:
+        if self.modal_mode != "n":
+            return
+        self.pending_n = max(MIN_N, min(MAX_N, self.pending_n + direction))
+        if self.n_value_label is not None:
+            self.n_value_label["text"] = str(self.pending_n)
+
+    def _confirm_n_editor(self) -> None:
+        if self.modal_mode != "n":
+            return
+        if self.pending_n == self.box_map.n:
+            self._close_n_editor()
+            self._set_status("N unchanged")
+            return
+        if self._cells_outside_n(self.pending_n):
+            self._open_n_shrink_confirm()
+            return
+        self._apply_pending_n()
+        self._close_n_editor()
+
+    def _open_n_shrink_confirm(self) -> None:
+        if self.n_confirm_panel:
+            self.n_confirm_panel.destroy()
+        if self.n_panel:
+            self.n_panel.hide()
+        self.modal_mode = "n-confirm"
+        self.n_confirm_panel = DirectFrame(
+            frameColor=(0.04, 0.05, 0.06, 0.98),
+            frameSize=(-0.78, 0.78, -0.30, 0.30),
+            pos=(0, 0, 0),
+        )
+        DirectLabel(
+            parent=self.n_confirm_panel,
+            text="Confirm N Change",
+            text_fg=(1, 1, 1, 1),
+            text_scale=0.054,
+            frameColor=(0, 0, 0, 0),
+            pos=(0, 0, 0.18),
+        )
+        DirectLabel(
+            parent=self.n_confirm_panel,
+            text="Changing N changes the map size.\nShrinking the map may remove some cubes. Confirm?",
+            text_fg=(0.92, 0.94, 0.96, 1),
+            text_scale=0.032,
+            frameColor=(0, 0, 0, 0),
+            pos=(0, 0, 0.03),
+        )
+        self._n_confirm_button("Confirm", (-0.18, 0, -0.17), self._confirm_shrink_n_change)
+        self._n_confirm_button("Cancel", (0.18, 0, -0.17), self._cancel_shrink_n_change)
+        self._set_status("Confirm N change")
+
+    def _n_confirm_button(self, text: str, pos: tuple[float, float, float], command: Callable[[], None]) -> DirectButton:
+        return DirectButton(
+            parent=self.n_confirm_panel,
+            text=text,
+            text_scale=0.038,
+            frameSize=(-0.14, 0.14, -0.048, 0.055),
+            frameColor=(0.24, 0.29, 0.34, 1),
+            text_fg=(1, 1, 1, 1),
+            pos=pos,
+            command=command,
+        )
+
+    def _confirm_shrink_n_change(self) -> None:
+        if self.modal_mode != "n-confirm":
+            return
+        self._apply_pending_n()
+        self._close_n_editor()
+
+    def _cancel_shrink_n_change(self) -> None:
+        if self.n_confirm_panel:
+            self.n_confirm_panel.destroy()
+        self.n_confirm_panel = None
+        if self.n_panel:
+            self.n_panel.show()
+        self.modal_mode = "n"
+        self._set_status("Edit N")
+
+    def _close_n_editor(self) -> None:
+        if self.n_confirm_panel:
+            self.n_confirm_panel.destroy()
+        if self.n_panel:
+            self.n_panel.destroy()
+        self.n_confirm_panel = None
+        self.n_panel = None
+        self.n_value_label = None
+        self.n_arrow_buttons = []
+        self.n_arrow_icons = []
+        self.pending_n = self.box_map.n
+        self.ui_open = False
+        self.modal_mode = None
+        self.crosshair.show()
+        self.set_mouse_capture(True)
+
+    def _cells_outside_n(self, n: int) -> list[Cell]:
+        size = 2**n
+        return [cell for cell in self.box_map.boxes if any(part < 0 or part >= size for part in cell)]
+
+    def _apply_pending_n(self) -> None:
+        old_n = self.box_map.n
+        self.box_map.n = self.pending_n
+        removed = self._remove_out_of_bounds_boxes()
+        self._setup_world()
+        self.player_pos = self._clamp_player_position(self.player_pos)
+        self._lift_player_out_of_blocks()
+        self._sync_shadow_lens()
+        if removed:
+            self._set_status(f"N changed {old_n}->{self.box_map.n}; removed {removed} cubes")
+        else:
+            self._set_status(f"N changed {old_n}->{self.box_map.n}")
+
+    def _remove_out_of_bounds_boxes(self) -> int:
+        outside = self._cells_outside_n(self.box_map.n)
+        for cell in outside:
+            self.box_map.boxes.pop(cell, None)
+        return len(outside)
 
     def _snap_player_to_support(self, tolerance: float) -> None:
         support_height = self._support_height_below(self.player_pos, tolerance)
@@ -1175,6 +1433,10 @@ class BoxEditorApp(ShowBase):
             self._close_help()
         elif self.modal_mode == "quit":
             self._activate_quit_choice()
+        elif self.modal_mode == "n":
+            self._confirm_n_editor()
+        elif self.modal_mode == "n-confirm":
+            self._confirm_shrink_n_change()
         elif self.modal_mode == "color":
             self._apply_color_edit()
 
@@ -1187,6 +1449,8 @@ class BoxEditorApp(ShowBase):
     def _focus_next_color_field(self, direction: int) -> None:
         if self.modal_mode == "quit":
             self._focus_next_quit_choice(direction)
+            return
+        if self.modal_mode in {"n", "n-confirm"}:
             return
         if self.modal_mode != "color":
             return
@@ -1238,6 +1502,13 @@ class BoxEditorApp(ShowBase):
             self._close_color_editor(recapture_mouse=False)
             self._set_status("Mouse released")
             return
+        if self.modal_mode == "n-confirm":
+            self._cancel_shrink_n_change()
+            return
+        if self.modal_mode == "n":
+            self._close_n_editor()
+            self._set_status("Mouse released")
+            return
         self.set_mouse_capture(False)
         self._open_quit_confirm()
 
@@ -1282,6 +1553,11 @@ class BoxEditorApp(ShowBase):
             self._close_help()
         elif self.modal_mode == "color":
             self._close_color_editor(recapture_mouse=False)
+        elif self.modal_mode == "n-confirm":
+            self._cancel_shrink_n_change()
+            self._close_n_editor()
+        elif self.modal_mode == "n":
+            self._close_n_editor()
 
         self._open_quit_confirm()
 

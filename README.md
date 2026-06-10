@@ -32,16 +32,33 @@ python -m box_editor_view pikachu.box
 
 ## File Format
 
-```json
-{
-  "N": 3,
-  "boxes": {
-    "1,2,0": [140, 140, 140, 255]
-  }
-}
+`.box` files are SQLite databases, not JSON text files. The editor stores sparse voxels with a compact palette schema:
+
+```sql
+CREATE TABLE metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE palette (
+    color_id INTEGER PRIMARY KEY,
+    r INTEGER NOT NULL CHECK (r BETWEEN 0 AND 255),
+    g INTEGER NOT NULL CHECK (g BETWEEN 0 AND 255),
+    b INTEGER NOT NULL CHECK (b BETWEEN 0 AND 255),
+    a INTEGER NOT NULL CHECK (a BETWEEN 1 AND 255),
+    UNIQUE (r, g, b, a)
+) WITHOUT ROWID;
+
+CREATE TABLE boxes (
+    x INTEGER NOT NULL,
+    y INTEGER NOT NULL,
+    z INTEGER NOT NULL,
+    color_id INTEGER NOT NULL REFERENCES palette(color_id),
+    PRIMARY KEY (x, y, z)
+) WITHOUT ROWID;
 ```
 
-`N` must be from `0` to `5`, and the editable map size is `(2^N)^3`. Empty cells are not written to the file.
+`metadata` contains `schema_version` and `N`. `N` must be from `0` to `5`, and the editable map size is `(2^N)^3`. Empty cells are not written to the `boxes` table. Each cube references a `palette.color_id`; RGBA values are stored once per distinct color, and unused palette colors are removed on save.
 
 ## Setup
 
@@ -112,8 +129,10 @@ The editor batches cubes into chunk meshes, renders only visible faces, greedily
 - `Shift`: move downward.
 - Right click: place a cube on the ground or on the clicked cube face.
 - Left click: delete the clicked cube.
+- Middle click: pick the clicked cube RGBA as the current placement color.
 - `E`: edit the RGBA values of the cube under the crosshair.
 - Set alpha to `0`: delete that cube instead of saving it.
+- `N`: change the map size exponent. Shrinking the map asks for confirmation if cubes would be removed.
 - `C`: look at the editor center, or the centroid of all cubes when cubes exist.
 - `F5`: switch first-person and third-person view.
 - `F2` or `Ctrl+S`: save.
