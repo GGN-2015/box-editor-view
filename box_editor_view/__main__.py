@@ -4,7 +4,8 @@ import argparse
 from pathlib import Path
 import sys
 
-from .box_file import BoxFormatError, DEFAULT_N, MAX_N, MIN_N, hash_box_file
+from .box_file import BoxFormatError, DEFAULT_N, MAX_N, MIN_N
+from .box_hash import hash_box_file
 
 
 def build_parser() -> argparse.ArgumentParser:

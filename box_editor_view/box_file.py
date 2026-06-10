@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
 import os
 from pathlib import Path
 import sqlite3
-import struct
 import time
 from typing import Iterable
 
@@ -18,7 +16,6 @@ MAX_N = 5
 DEFAULT_N = 3
 DEFAULT_COLOR: RGBA = (140 / 255, 140 / 255, 140 / 255, 1.0)
 BOX_SCHEMA_VERSION = 2
-BOX_HASH_VERSION = 1
 
 
 class BoxFormatError(ValueError):
@@ -120,20 +117,6 @@ def rgba_from_255(channels: Iterable[int]) -> RGBA:
 def format_cell(cell: Cell) -> str:
     x, y, z = cell
     return f"{x},{y},{z}"
-
-
-def box_hash(box_map: BoxMap) -> str:
-    normalized = BoxMap(n=box_map.n, boxes=box_map.boxes)
-    digest = hashlib.sha256()
-    digest.update(b"BOX_EDITOR_VIEW_CONTENT_HASH\0")
-    digest.update(struct.pack(">BBI", BOX_HASH_VERSION, normalized.n, len(normalized.boxes)))
-    for cell, color in sorted(normalized.boxes.items()):
-        digest.update(struct.pack(">HHHBBBB", cell[0], cell[1], cell[2], *rgba_to_255(color)))
-    return digest.hexdigest()
-
-
-def hash_box_file(path: str | Path) -> str:
-    return box_hash(load_box(path))
 
 
 def load_box(path: str | Path) -> BoxMap:

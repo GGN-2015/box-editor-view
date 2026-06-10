@@ -2,7 +2,8 @@ import sqlite3
 
 import pytest
 
-from box_editor_view.box_file import BOX_SCHEMA_VERSION, BoxFormatError, BoxMap, box_hash, hash_box_file, load_box, save_box
+from box_editor_view.box_file import BOX_SCHEMA_VERSION, BoxFormatError, BoxMap, load_box, save_box
+from box_editor_view.box_hash import box_hash, hash_box_file
 
 
 def test_sparse_round_trip_uses_sqlite_and_omits_empty_cells(tmp_path):
