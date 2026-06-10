@@ -10,11 +10,11 @@ This software is part of the future `NekoMouseCraft` project. `NekoMouseCraft` i
 
 This repository includes `piano.box`, a hand-built voxel piano scene created with the editor.
 
-![Voxel piano front view](docs/images/piano_front.png)
+![Voxel piano front view](https://raw.githubusercontent.com/GGN-2015/box-editor-view/refs/heads/main/docs/images/piano_front.png)
 
-![Voxel piano keyboard close-up](docs/images/piano_keys.png)
+![Voxel piano keyboard close-up](https://raw.githubusercontent.com/GGN-2015/box-editor-view/refs/heads/main/docs/images/piano_keys.png)
 
-![Voxel piano angled view](docs/images/piano_angle.png)
+![Voxel piano angled view](https://raw.githubusercontent.com/GGN-2015/box-editor-view/refs/heads/main/docs/images/piano_angle.png)
 
 Open the demo scene:
 
