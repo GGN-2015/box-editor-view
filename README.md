@@ -30,7 +30,7 @@ python -m box_editor_view pikachu.box
 
 ## File Format
 
-`.box` files are SQLite databases, not JSON text files. The editor stores sparse voxels with a compact palette schema:
+`.box` files are SQLite databases. The editor stores sparse voxels with a compact palette schema:
 
 ```sql
 CREATE TABLE metadata (
