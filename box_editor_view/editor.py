@@ -301,7 +301,7 @@ class BoxEditorApp(ShowBase):
         )
         self.help_hint = OnscreenText(
             text="Press H for help",
-            pos=(1.30, 0.94),
+            pos=(1.30, 0.80),
             align=1,
             scale=0.033,
             fg=(1, 1, 1, 0.92),
@@ -310,7 +310,7 @@ class BoxEditorApp(ShowBase):
         )
         self.center_hint = OnscreenText(
             text="Press C to look at editor center",
-            pos=(1.30, 0.90),
+            pos=(1.30, 0.76),
             align=1,
             scale=0.030,
             fg=(1, 1, 1, 0.88),

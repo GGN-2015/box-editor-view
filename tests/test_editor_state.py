@@ -214,6 +214,15 @@ def test_editor_starts_maximized_and_mouse_captured(tmp_path, monkeypatch):
         app.destroy()
 
 
+def test_right_hud_hints_stay_below_fps_meter(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        assert app.help_hint.getPos()[1] <= 0.82
+        assert app.center_hint.getPos()[1] < app.help_hint.getPos()[1]
+    finally:
+        app.destroy()
+
+
 def test_startup_maximize_is_retried_for_initial_frames(tmp_path, monkeypatch):
     calls = []
 
