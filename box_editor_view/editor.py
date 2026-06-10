@@ -36,6 +36,7 @@ from .audio import ensure_sound_files
 from .box_file import BoxFormatError, BoxMap, Cell, DEFAULT_COLOR, MAX_N, MIN_N, RGBA, load_box, save_box
 from .geometry import FaceNormal, make_bounds, make_checker_ground, make_cube_outline, make_cuboid
 from .gpu import GpuProfile, detect_gpu_profile
+from .platform_window import disable_ime_for_window, maximize_window
 from .voxel_mesh import (
     CHUNK_SIZE,
     ChunkKey,
@@ -84,6 +85,7 @@ MOUSE_SENSITIVITY = 0.055
 STANDING_TOLERANCE = 0.10
 SOUND_VOLUME = 0.5
 CLOSE_REQUEST_EVENT = "box-editor-close-request"
+STARTUP_MAXIMIZE_FRAMES = 30
 
 
 class _NullSound:
@@ -107,6 +109,8 @@ class BoxEditorApp(ShowBase):
         self.current_color: RGBA = DEFAULT_COLOR
         self.saved_snapshot = self._current_map_snapshot()
         self.gpu_profile: GpuProfile = detect_gpu_profile(self.win.getGsg() if self.win else None)
+        self.window_maximized = maximize_window(self.win)
+        self.ime_disabled = disable_ime_for_window(self.win)
 
         self.world = self.render.attachNewNode("world")
         self.blocks_root = self.world.attachNewNode("blocks")
@@ -143,6 +147,7 @@ class BoxEditorApp(ShowBase):
         self.quit_buttons: dict[str, DirectButton] = {}
         self.active_quit_choice = "cancel"
         self.quit_restore_mouse_capture = False
+        self.startup_maximize_frames = STARTUP_MAXIMIZE_FRAMES
 
         self.key_state = {
             "forward": False,
@@ -161,9 +166,9 @@ class BoxEditorApp(ShowBase):
         self._setup_audio()
         self._bind_events()
 
-        self.set_mouse_capture(False)
+        self.set_mouse_capture(True)
         self.taskMgr.add(self._update, "box-editor-update")
-        self._set_status("Click to capture mouse")
+        self._set_status("Ready")
 
     def _load_initial_map(self, path: Path, new_file: bool, new_n: int) -> BoxMap:
         if path.exists() and not new_file:
@@ -403,6 +408,7 @@ class BoxEditorApp(ShowBase):
 
     def _update(self, task):
         dt = globalClock.getDt()
+        self._keep_startup_window_maximized()
         if self.mouse_captured and not self.ui_open:
             self._update_mouse_look()
         if not self.ui_open:
@@ -411,6 +417,12 @@ class BoxEditorApp(ShowBase):
         self._update_hover_outline()
         self._update_hud()
         return task.cont
+
+    def _keep_startup_window_maximized(self) -> None:
+        if self.startup_maximize_frames <= 0:
+            return
+        self.window_maximized = maximize_window(self.win) or self.window_maximized
+        self.startup_maximize_frames -= 1
 
     def _update_mouse_look(self) -> None:
         if not self.win or not hasattr(self.win, "getPointer"):
@@ -1514,10 +1526,14 @@ class BoxEditorApp(ShowBase):
 
     def set_mouse_capture(self, captured: bool) -> None:
         self.mouse_captured = captured
+        if captured:
+            self.ime_disabled = disable_ime_for_window(self.win) or self.ime_disabled
         props = WindowProperties()
         props.setCursorHidden(captured)
         if hasattr(self.win, "requestProperties"):
             self.win.requestProperties(props)
+        if captured:
+            self.window_maximized = maximize_window(self.win) or self.window_maximized
         if captured:
             self._center_pointer()
             self.crosshair.show()
@@ -1542,6 +1558,7 @@ class BoxEditorApp(ShowBase):
             return
         if window == self.win:
             self._sync_camera_aspect()
+            self.ime_disabled = disable_ime_for_window(self.win) or self.ime_disabled
 
     def userExit(self) -> None:
         self._request_quit()

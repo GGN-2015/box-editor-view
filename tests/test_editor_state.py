@@ -194,6 +194,65 @@ def test_camera_aspect_tracks_window_size(tmp_path):
         app.destroy()
 
 
+def test_editor_starts_maximized_and_mouse_captured(tmp_path, monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(editor, "disable_ime_for_window", lambda _window: True)
+
+    def fake_maximize(window):
+        calls.append(window)
+        return True
+
+    monkeypatch.setattr(editor, "maximize_window", fake_maximize)
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        assert app.window_maximized is True
+        assert calls == [app.win, app.win]
+        assert app.mouse_captured is True
+        assert app.crosshair.isHidden() is False
+    finally:
+        app.destroy()
+
+
+def test_startup_maximize_is_retried_for_initial_frames(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_maximize(window):
+        calls.append(window)
+        return True
+
+    monkeypatch.setattr(editor, "maximize_window", fake_maximize)
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        calls.clear()
+        app.startup_maximize_frames = 2
+
+        app._keep_startup_window_maximized()
+        app._keep_startup_window_maximized()
+        app._keep_startup_window_maximized()
+
+        assert calls == [app.win, app.win]
+        assert app.startup_maximize_frames == 0
+    finally:
+        app.destroy()
+
+
+def test_editor_disables_ime_for_game_window(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_disable_ime(window):
+        calls.append(window)
+        return True
+
+    monkeypatch.setattr(editor, "disable_ime_for_window", fake_disable_ime)
+    app = make_app(tmp_path, BoxMap(n=1))
+    try:
+        assert app.ime_disabled is True
+        assert calls == [app.win, app.win]
+    finally:
+        app.destroy()
+
+
 def test_editor_sound_volume_is_half(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1))
     try:
@@ -572,6 +631,7 @@ def test_transparent_blocks_use_alpha_rendering_and_no_shadow(tmp_path):
 def test_block_alpha_changes_rendered_opacity(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 0.25)}))
     try:
+        app.set_mouse_capture(False)
         app.player_pos = Vec3(0.5, -3, -1.2)
         app.heading = 0
         app.pitch = 0
