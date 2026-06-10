@@ -1,7 +1,5 @@
 # box-editor-view
 
-Author: GGN_2015
-
 Box-Editor-View is a Panda3D visual editor for sparse `.box` voxel maps. At its core, it is a box editor: every editable element is a `1x1x1` cube with RGBA color.
 
 This software is part of the future `NekoMouseCraft` project. `NekoMouseCraft` is planned as a Minecraft-like creative-mode game, and Box-Editor-View is the tool for building the reusable cube structures that will live inside it. Each `.box` file can become a small model, prop, landmark, or scene fragment, and those pieces can later be used to construct larger game worlds.
