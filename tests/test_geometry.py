@@ -62,3 +62,13 @@ def test_chunk_mesh_keeps_different_transparent_faces_separate():
     assert mesh.stats.merged_quads == 12
     assert mesh.stats.transparent_quads == 12
     assert mesh.transparent is not None
+
+
+def test_chunk_mesh_treats_alpha_zero_as_opaque():
+    mesh = build_chunk_mesh({(0, 0, 0): (1, 0.5, 0, 0)}, (0, 0, 0), 2)
+
+    assert mesh.stats.visible_faces == 6
+    assert mesh.stats.opaque_quads == 6
+    assert mesh.stats.transparent_quads == 0
+    assert mesh.opaque is not None
+    assert mesh.transparent is None

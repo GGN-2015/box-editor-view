@@ -386,6 +386,27 @@ def test_look_at_editor_focus_points_camera_at_target(tmp_path):
         app.destroy()
 
 
+def test_editor_starts_looking_at_focus_target(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=2, boxes={(2, 1, 1): (1, 0, 0, 1)}))
+    try:
+        target = app._editor_focus_target()
+        eye = app.player_pos + Vec3(0, 0, editor.EYE_HEIGHT)
+        heading = math.radians(app.heading)
+        pitch = math.radians(app.pitch)
+        forward = Vec3(
+            -math.sin(heading) * math.cos(pitch),
+            math.cos(heading) * math.cos(pitch),
+            math.sin(pitch),
+        )
+        expected = Vec3(target.x - eye.x, target.y - eye.y, target.z - eye.z)
+        expected.normalize()
+
+        assert forward.dot(expected) > 0.999
+        assert app.status.getText() == "Ready"
+    finally:
+        app.destroy()
+
+
 def test_n_editor_changes_larger_n_without_delete_confirm(tmp_path):
     app = make_app(tmp_path, BoxMap(n=1, boxes={(1, 1, 1): (1, 0, 0, 1)}))
     try:
@@ -633,6 +654,30 @@ def test_transparent_blocks_use_alpha_rendering_and_no_shadow(tmp_path):
         assert mesh.opaque.getState().getAttrib(CullBinAttrib) is None
         assert mesh.opaque.getState().getAttrib(DepthWriteAttrib) is None
         assert not mesh.opaque.isHidden(app.hover_shadow_mask)
+    finally:
+        app.destroy()
+
+
+def test_alpha_zero_blocks_are_opaque_lights(tmp_path):
+    app = make_app(tmp_path, BoxMap(n=1, boxes={(0, 0, 0): (1, 0.5, 0, 0)}))
+    try:
+        mesh = next(iter(app.chunk_meshes.values()))
+
+        assert mesh.opaque is not None
+        assert mesh.transparent is None
+        assert mesh.stats.opaque_quads == 6
+        assert mesh.stats.transparent_quads == 0
+        assert mesh.opaque.getTransparency() == TransparencyAttrib.MNone
+        assert not mesh.opaque.isHidden(app.hover_shadow_mask)
+
+        light_path = app.block_lights[(0, 0, 0)]
+        assert tuple(light_path.node().getColor()) == pytest.approx((1.0, 128 / 255, 0.0, 1.0))
+
+        app.box_map.set_box((0, 0, 0), (1, 0.5, 0, 1))
+        app._refresh_block_and_neighbors((0, 0, 0))
+
+        assert (0, 0, 0) not in app.block_lights
+        assert light_path.isEmpty()
     finally:
         app.destroy()
 

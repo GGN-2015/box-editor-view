@@ -51,10 +51,11 @@ class _MeshBuilder:
         self.quads = 0
 
     def add_quad(self, vertices: tuple[tuple[float, float, float], ...], normal: FaceNormal, color: RGBA) -> None:
+        render_color = render_rgba(color)
         for vertex in vertices:
             self.vertex_writer.addData3f(*vertex)
             self.normal_writer.addData3f(*normal)
-            self.color_writer.addData4f(*color)
+            self.color_writer.addData4f(*render_color)
 
         self.triangles.addVertices(self.vertex_index, self.vertex_index + 1, self.vertex_index + 2)
         self.triangles.addVertices(self.vertex_index, self.vertex_index + 2, self.vertex_index + 3)
@@ -86,9 +87,23 @@ def chunk_bounds(chunk_key: ChunkKey, map_size: int, chunk_size: int = CHUNK_SIZ
 
 
 def neighbor_hides_face(color: RGBA, neighbor_color: RGBA) -> bool:
-    if color[3] >= 1.0 and neighbor_color[3] >= 1.0:
+    if not is_transparent_color(color) and not is_transparent_color(neighbor_color):
         return True
-    return color[3] < 1.0 and neighbor_color[3] < 1.0 and neighbor_color == color
+    return is_transparent_color(color) and is_transparent_color(neighbor_color) and neighbor_color == color
+
+
+def is_transparent_color(color: RGBA) -> bool:
+    return 0.0 < color[3] < 1.0
+
+
+def is_light_color(color: RGBA) -> bool:
+    return color[3] <= 0.0 and any(channel > 0.0 for channel in color[:3])
+
+
+def render_rgba(color: RGBA) -> RGBA:
+    if color[3] <= 0.0:
+        return (color[0], color[1], color[2], 1.0)
+    return color
 
 
 def visible_faces_for_cell(cell: Cell, color: RGBA, boxes: Mapping[Cell, RGBA]) -> set[FaceNormal]:
@@ -118,7 +133,7 @@ def build_chunk_mesh(
         source_blocks += 1
         for normal in visible_faces_for_cell(cell, color, boxes):
             plane, u, v = _face_plane_uv(cell, normal)
-            transparent = color[3] < 1.0
+            transparent = is_transparent_color(color)
             groups.setdefault((transparent, normal, plane, color), set()).add((u, v))
             visible_faces += 1
 

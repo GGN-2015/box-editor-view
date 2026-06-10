@@ -43,7 +43,7 @@ CREATE TABLE palette (
     r INTEGER NOT NULL CHECK (r BETWEEN 0 AND 255),
     g INTEGER NOT NULL CHECK (g BETWEEN 0 AND 255),
     b INTEGER NOT NULL CHECK (b BETWEEN 0 AND 255),
-    a INTEGER NOT NULL CHECK (a BETWEEN 1 AND 255),
+    a INTEGER NOT NULL CHECK (a BETWEEN 0 AND 255),
     UNIQUE (r, g, b, a)
 ) WITHOUT ROWID;
 
@@ -125,7 +125,13 @@ python scripts/measure_fps.py piano.box --frames 600 --warmup 120
 
 ## Performance
 
-The editor batches cubes into chunk meshes, renders only visible faces, greedily merges same-color coplanar faces, and uses a voxel raycast for mouse picking instead of one collision object per cube. It also detects the active Panda3D renderer and enables conservative GPU settings when hardware acceleration is available. Opaque chunk meshes cast shadows; transparent chunk meshes keep real alpha blending and do not cast shadows.
+The editor batches cubes into chunk meshes, renders only visible faces, greedily merges same-color coplanar faces, and uses a voxel raycast for mouse picking instead of one collision object per cube. It also detects the active Panda3D renderer and enables conservative GPU settings when hardware acceleration is available. Opaque chunk meshes cast shadows; transparent chunk meshes keep real alpha blending and do not cast shadows. Cubes with alpha `0` are rendered as opaque RGB cubes and act as RGB-colored light sources.
+
+## Lighting
+
+The alpha channel has one special lighting rule: a cube with alpha `0` is still a real saved cube, not an empty cell. It is rendered as an opaque cube using its RGB color, and the editor places a small point light at the cube center. The light color is exactly the cube RGB value, so `255 0 0 0` creates a solid red light cube, `0 255 0 0` creates a solid green light cube, and `0 0 0 0` is an opaque black cube with no visible light contribution.
+
+Cubes with alpha from `1` to `254` are ordinary transparent cubes. They use alpha blending, do not cast shadows, and do not emit light. Cubes with alpha `255` are ordinary opaque cubes. Use left click to delete a cube; setting alpha to `0` no longer deletes it.
 
 ## Controls
 
@@ -138,7 +144,7 @@ The editor batches cubes into chunk meshes, renders only visible faces, greedily
 - Left click: delete the clicked cube.
 - Middle click: pick the clicked cube RGBA as the current placement color.
 - `E`: edit the RGBA values of the cube under the crosshair.
-- Set alpha to `0`: delete that cube instead of saving it.
+- Set alpha to `0`: keep the cube opaque and make it emit RGB-colored light.
 - `N`: change the map size exponent. Shrinking the map asks for confirmation if cubes would be removed.
 - `C`: look at the editor center, or the centroid of all cubes when cubes exist.
 - `F5`: switch first-person and third-person view.

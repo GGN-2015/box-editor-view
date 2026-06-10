@@ -26,6 +26,7 @@ from panda3d.core import (
     NodePath,
     Point2,
     Point3,
+    PointLight,
     TransparencyAttrib,
     Vec3,
     WindowProperties,
@@ -43,6 +44,7 @@ from .voxel_mesh import (
     ChunkMesh,
     build_chunk_mesh,
     chunk_key_for_cell,
+    is_light_color,
     neighbor_hides_face,
     visible_faces_for_cell,
 )
@@ -115,6 +117,7 @@ class BoxEditorApp(ShowBase):
         self.world = self.render.attachNewNode("world")
         self.blocks_root = self.world.attachNewNode("blocks")
         self.chunk_meshes: dict[ChunkKey, ChunkMesh] = {}
+        self.block_lights: dict[Cell, NodePath] = {}
         self.ground_node: NodePath | None = None
         self.bounds_node: NodePath | None = None
         self.hover_outline = make_cube_outline()
@@ -167,6 +170,7 @@ class BoxEditorApp(ShowBase):
         self._bind_events()
 
         self.set_mouse_capture(True)
+        self._look_at_point(self._editor_focus_target())
         self.taskMgr.add(self._update, "box-editor-update")
         self._set_status("Ready")
 
@@ -256,6 +260,7 @@ class BoxEditorApp(ShowBase):
         self.bounds_node.reparentTo(self.world)
         self.bounds_node.hide(self.hover_shadow_mask)
         self._rebuild_all_chunks()
+        self._rebuild_block_lights()
 
     def _setup_player_model(self) -> None:
         self.player_model = self.render.attachNewNode("player")
@@ -701,6 +706,7 @@ class BoxEditorApp(ShowBase):
                     "Esc: release mouse and show exit choices / close dialogs",
                     "In dialogs: Tab/Shift+Tab or arrows switch focus",
                     "In color editor: type RGBA values",
+                    "Alpha 0: opaque RGB light source",
                 ]
             ),
             text_align=0,
@@ -1217,6 +1223,9 @@ class BoxEditorApp(ShowBase):
         chunk_keys = {chunk_key_for_cell(cell) for cell in cells if self._cell_can_affect_chunk(cell)}
         for key in chunk_keys:
             self._rebuild_chunk(key)
+        for cell in cells:
+            if self._cell_can_affect_chunk(cell):
+                self._sync_block_light(cell)
 
     def _remove_block_node(self, cell: Cell) -> None:
         self._rebuild_chunks_for_cells([cell])
@@ -1251,6 +1260,34 @@ class BoxEditorApp(ShowBase):
             mesh.opaque.removeNode()
         if mesh.transparent:
             mesh.transparent.removeNode()
+
+    def _rebuild_block_lights(self) -> None:
+        for light in self.block_lights.values():
+            self._remove_block_light(light)
+        self.block_lights.clear()
+        for cell in self.box_map.boxes:
+            self._sync_block_light(cell)
+
+    def _sync_block_light(self, cell: Cell) -> None:
+        old_light = self.block_lights.pop(cell, None)
+        if old_light is not None:
+            self._remove_block_light(old_light)
+
+        color = self.box_map.get_box(cell)
+        if color is None or not is_light_color(color):
+            return
+
+        light = PointLight(f"block-light-{cell[0]}-{cell[1]}-{cell[2]}")
+        light.setColor((color[0], color[1], color[2], 1.0))
+        light.setAttenuation((1.0, 0.12, 0.035))
+        light_path = self.world.attachNewNode(light)
+        light_path.setPos(cell[0] + 0.5, cell[1] + 0.5, cell[2] + 0.5)
+        self.render.setLight(light_path)
+        self.block_lights[cell] = light_path
+
+    def _remove_block_light(self, light_path: NodePath) -> None:
+        self.render.clearLight(light_path)
+        light_path.removeNode()
 
     def _chunk_stats(self) -> dict[str, int]:
         stats = {
@@ -1396,14 +1433,6 @@ class BoxEditorApp(ShowBase):
             return
 
         edited = self.color_target
-        if rgba[3] <= 0.0:
-            if self.box_map.remove_box(edited):
-                self._refresh_block_and_neighbors(edited)
-                self.break_sound.play()
-            self._close_color_editor()
-            self._set_status(f"Deleted {edited}")
-            return
-
         self.current_color = rgba  # type: ignore[assignment]
         self.box_map.set_box(self.color_target, self.current_color)
         self._refresh_block_and_neighbors(self.color_target)

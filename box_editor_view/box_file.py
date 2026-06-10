@@ -34,8 +34,7 @@ class BoxMap:
         normalized_boxes: dict[Cell, RGBA] = {}
         for cell, color in self.boxes.items():
             normalized_color = normalize_rgba(color)
-            if normalized_color[3] > 0.0:
-                normalized_boxes[validate_cell(cell, self.size)] = normalized_color
+            normalized_boxes[validate_cell(cell, self.size)] = normalized_color
         self.boxes = normalized_boxes
 
     @property
@@ -51,8 +50,6 @@ class BoxMap:
             return False
         normalized_cell = tuple(map(int, cell))
         normalized_color = normalize_rgba(color)
-        if normalized_color[3] <= 0.0:
-            return self.remove_box(normalized_cell)
         self.boxes[normalized_cell] = normalized_color
         return True
 
@@ -211,7 +208,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             r INTEGER NOT NULL CHECK (r BETWEEN 0 AND 255),
             g INTEGER NOT NULL CHECK (g BETWEEN 0 AND 255),
             b INTEGER NOT NULL CHECK (b BETWEEN 0 AND 255),
-            a INTEGER NOT NULL CHECK (a BETWEEN 1 AND 255),
+            a INTEGER NOT NULL CHECK (a BETWEEN 0 AND 255),
             UNIQUE (r, g, b, a)
         ) WITHOUT ROWID;
 
@@ -232,7 +229,7 @@ def _write_box_map(connection: sqlite3.Connection, box_map: BoxMap) -> None:
         "INSERT INTO metadata (key, value) VALUES (?, ?)",
         (("schema_version", str(BOX_SCHEMA_VERSION)), ("N", str(box_map.n))),
     )
-    palette_colors = sorted({_rgba_to_storage(color) for color in box_map.boxes.values() if color[3] > 0.0})
+    palette_colors = sorted({_rgba_to_storage(color) for color in box_map.boxes.values()})
     palette = {color: color_id for color_id, color in enumerate(palette_colors, start=1)}
     connection.executemany(
         "INSERT INTO palette (color_id, r, g, b, a) VALUES (?, ?, ?, ?, ?)",
@@ -240,8 +237,6 @@ def _write_box_map(connection: sqlite3.Connection, box_map: BoxMap) -> None:
     )
     rows = []
     for cell, color in sorted(box_map.boxes.items()):
-        if color[3] <= 0.0:
-            continue
         storage_color = _rgba_to_storage(color)
         rows.append((cell[0], cell[1], cell[2], palette[storage_color]))
     connection.executemany(
@@ -276,10 +271,7 @@ def _read_metadata(connection: sqlite3.Connection, key: str, path: Path) -> str:
 
 
 def _rgba_to_storage(color: RGBA) -> tuple[int, int, int, int]:
-    r, g, b, a = rgba_to_255(color)
-    if color[3] > 0.0:
-        a = max(1, a)
-    return r, g, b, a
+    return rgba_to_255(color)
 
 
 def _rgba_from_storage(channels: Iterable[object], path: Path) -> RGBA:
@@ -292,8 +284,7 @@ def _rgba_from_storage(channels: Iterable[object], path: Path) -> RGBA:
             value = int(channel)
         except (TypeError, ValueError) as exc:
             raise BoxFormatError(f"{path} has invalid {label} channel {channel}") from exc
-        minimum = 1 if label == "a" else 0
-        if value < minimum or value > 255:
+        if value < 0 or value > 255:
             raise BoxFormatError(f"{path} has invalid {label} channel {value}")
         rgba.append(value)
     return rgba_from_255(rgba)

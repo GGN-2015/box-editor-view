@@ -230,17 +230,31 @@ def test_loader_rejects_out_of_bounds_boxes(tmp_path):
         load_box(path)
 
 
-def test_alpha_zero_removes_and_is_not_saved(tmp_path):
+def test_alpha_zero_is_saved_as_a_real_box(tmp_path):
     box_map = BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 0), (1, 1, 1): (0, 1, 0, 1)})
-    assert box_map.boxes == {(1, 1, 1): (0.0, 1.0, 0.0, 1.0)}
+    assert box_map.boxes == {
+        (0, 0, 0): (1.0, 0.0, 0.0, 0.0),
+        (1, 1, 1): (0.0, 1.0, 0.0, 1.0),
+    }
 
     assert box_map.set_box((1, 1, 1), (0, 1, 0, 0))
-    assert box_map.boxes == {}
+    assert box_map.boxes == {
+        (0, 0, 0): (1.0, 0.0, 0.0, 0.0),
+        (1, 1, 1): (0.0, 1.0, 0.0, 0.0),
+    }
 
     path = tmp_path / "alpha.box"
     save_box(path, box_map)
     with sqlite3.connect(path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 0
+        assert connection.execute("SELECT r, g, b, a FROM palette ORDER BY r, g, b, a").fetchall() == [
+            (0, 255, 0, 0),
+            (255, 0, 0, 0),
+        ]
+        assert connection.execute("SELECT COUNT(*) FROM boxes").fetchone()[0] == 2
+
+    loaded = load_box(path)
+    assert loaded.boxes[(0, 0, 0)] == pytest.approx((1.0, 0.0, 0.0, 0.0))
+    assert loaded.boxes[(1, 1, 1)] == pytest.approx((0.0, 1.0, 0.0, 0.0))
 
 
 def test_default_color_uses_255_alpha(tmp_path):
