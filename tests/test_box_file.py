@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from box_editor_view.box_file import BOX_SCHEMA_VERSION, BoxFormatError, BoxMap, load_box, save_box
+from box_editor_view.box_file import BOX_SCHEMA_VERSION, BoxFormatError, BoxMap, box_hash, hash_box_file, load_box, save_box
 
 
 def test_sparse_round_trip_uses_sqlite_and_omits_empty_cells(tmp_path):
@@ -144,6 +144,58 @@ def test_unused_palette_colors_are_not_saved(tmp_path):
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT r, g, b, a FROM palette").fetchall() == [(255, 0, 0, 255)]
         assert connection.execute("SELECT x, y, z, color_id FROM boxes").fetchall() == [(0, 0, 0, 1)]
+
+
+def test_hash_uses_box_content_not_palette_ids_or_unused_colors(tmp_path):
+    first = tmp_path / "first.box"
+    second = tmp_path / "second.box"
+    box_map = BoxMap(n=2, boxes={(1, 2, 3): (255, 0, 0, 255), (0, 0, 0): (0, 128, 255, 64)})
+    save_box(first, box_map)
+
+    with sqlite3.connect(second) as connection:
+        connection.executescript(
+            f"""
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
+            CREATE TABLE palette (
+                color_id INTEGER PRIMARY KEY,
+                r INTEGER NOT NULL,
+                g INTEGER NOT NULL,
+                b INTEGER NOT NULL,
+                a INTEGER NOT NULL,
+                UNIQUE (r, g, b, a)
+            ) WITHOUT ROWID;
+            CREATE TABLE boxes (
+                x INTEGER NOT NULL,
+                y INTEGER NOT NULL,
+                z INTEGER NOT NULL,
+                color_id INTEGER NOT NULL,
+                PRIMARY KEY (x, y, z)
+            ) WITHOUT ROWID;
+            INSERT INTO metadata (key, value) VALUES ('schema_version', '{BOX_SCHEMA_VERSION}'), ('N', '2');
+            INSERT INTO palette (color_id, r, g, b, a) VALUES
+                (10, 255, 0, 0, 255),
+                (20, 0, 128, 255, 64),
+                (30, 1, 2, 3, 4);
+            INSERT INTO boxes (x, y, z, color_id) VALUES
+                (1, 2, 3, 10),
+                (0, 0, 0, 20);
+            """
+        )
+
+    assert hash_box_file(first) == hash_box_file(second)
+    assert hash_box_file(first) == box_hash(box_map)
+    assert len(hash_box_file(first)) == 64
+
+
+def test_hash_changes_when_box_content_changes():
+    base = BoxMap(n=1, boxes={(0, 0, 0): (1, 0, 0, 1)})
+    changed_color = BoxMap(n=1, boxes={(0, 0, 0): (0, 1, 0, 1)})
+    changed_position = BoxMap(n=1, boxes={(1, 0, 0): (1, 0, 0, 1)})
+    changed_n = BoxMap(n=2, boxes={(0, 0, 0): (1, 0, 0, 1)})
+
+    assert box_hash(base) != box_hash(changed_color)
+    assert box_hash(base) != box_hash(changed_position)
+    assert box_hash(base) != box_hash(changed_n)
 
 
 def test_loader_rejects_out_of_bounds_boxes(tmp_path):

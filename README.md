@@ -94,6 +94,15 @@ python -m box_editor_view my_map.box --new -n 5
 
 If no path is given, the editor uses `untitled.box` in the current directory.
 
+Print a stable content hash without opening the editor:
+
+```bash
+source venv/bin/activate
+python -m box_editor_view --hash my_map.box
+```
+
+The hash is based on `N` plus each cube coordinate and RGBA value. Palette IDs and unused palette entries do not affect it. Invalid `.box` files print `FormatError` to stderr.
+
 ## Scripts
 
 The `scripts/` directory contains repository maintenance and demo-generation tools. These scripts are not packaged into the installable Python project.
