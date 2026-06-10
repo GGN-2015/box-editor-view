@@ -84,3 +84,64 @@ except SystemExit as exc:
     assert result.returncode == 0
     assert result.stdout == f"{hash_box_file(path)}\n"
     assert result.stderr == ""
+
+
+def test_render_png_cli_writes_transparent_preview_without_editor(tmp_path):
+    path = tmp_path / "sample.box"
+    output = tmp_path / "preview.png"
+    save_box(
+        path,
+        BoxMap(
+            n=1,
+            boxes={
+                (0, 0, 0): (1, 0, 0, 1),
+                (1, 0, 1): (0, 0, 1, 0.5),
+            },
+        ),
+    )
+    script = f"""
+import importlib.abc
+import runpy
+import sys
+
+class BlockEditor(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "box_editor_view.editor":
+            raise AssertionError("render PNG CLI should not import the editor")
+        return None
+
+sys.meta_path.insert(0, BlockEditor())
+sys.argv = [
+    "box_editor_view",
+    r"{path}",
+    "--render-png",
+    r"{output}",
+    "--render-size",
+    "96",
+]
+try:
+    runpy.run_module("box_editor_view", run_name="__main__", alter_sys=True)
+except SystemExit as exc:
+    raise SystemExit(exc.code)
+"""
+
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, cwd=Path.cwd())
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{output}\n"
+    assert result.stderr == ""
+    assert output.exists()
+
+    from panda3d.core import Filename, PNMImage
+
+    image = PNMImage()
+    assert image.read(Filename.fromOsSpecific(str(output)))
+    assert image.getXSize() == 96
+    assert image.getYSize() == 96
+    assert image.hasAlpha()
+    assert image.getAlpha(0, 0) == 0
+    assert any(
+        image.getAlpha(x, y) > 0
+        for x in range(image.getXSize())
+        for y in range(image.getYSize())
+    )

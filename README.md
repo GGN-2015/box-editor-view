@@ -101,6 +101,26 @@ python -m box_editor_view --hash my_map.box
 
 The hash is based on `N` plus each cube coordinate and RGBA value. Palette IDs and unused palette entries do not affect it. Invalid `.box` files print `FormatError` to stderr.
 
+## Render PNG
+
+Render a transparent PNG preview without opening the editor:
+
+```bash
+source venv/bin/activate
+python -m box_editor_view --render-png pikachu.box
+```
+
+By default this writes `pikachu.png`. You can also choose the output path and image size:
+
+```bash
+source venv/bin/activate
+python -m box_editor_view pikachu.box --render-png docs/images/pikachu_render_png.png --render-size 1024
+```
+
+The preview is rendered from the right-front-upper direction, uses a transparent background outside the model, and does not render the checkerboard ground or editor boundary.
+
+![Pikachu rendered with render-png](https://raw.githubusercontent.com/GGN-2015/box-editor-view/refs/heads/main/docs/images/pikachu_render_png.png)
+
 ## Scripts
 
 The `scripts/` directory contains repository maintenance and demo-generation tools. These scripts are not packaged into the installable Python project.
