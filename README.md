@@ -121,6 +121,24 @@ The preview is rendered from the right-front-upper direction, uses a transparent
 
 ![Pikachu rendered with render-png](https://raw.githubusercontent.com/GGN-2015/box-editor-view/refs/heads/main/docs/images/pikachu_render_png.png)
 
+## Developer API
+
+Use the headless Python API when you need to create, inspect, or edit `.box` files from scripts without opening the visual editor:
+
+```python
+from box_editor_view import BoxDocument, open_box
+
+doc = BoxDocument.new(n=3, path="example.box")
+doc.fill((0, 0, 0), (4, 1, 1), (255, 0, 0, 255))
+doc.save()
+
+doc = open_box("example.box")
+doc.translate((0, 1, 0))
+doc.save()
+```
+
+See [`docs/developer-api.md`](docs/developer-api.md) for the full API reference and examples.
+
 ## Scripts
 
 The `scripts/` directory contains repository maintenance and demo-generation tools. These scripts are not packaged into the installable Python project.
